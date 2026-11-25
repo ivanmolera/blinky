@@ -7,6 +7,7 @@ A native macOS app for accessing your Blink cameras from your Mac. The interface
 - macOS 14 or later.
 - Xcode 15.3 or later, with Swift 5.10 or later.
 - Python 3.10 or later to connect a Blink account. Demo mode does not require Python.
+- FFmpeg for live video. Standard Homebrew locations are detected automatically; `BLINKY_FFMPEG` can select another executable.
 
 ## Try the demo
 
@@ -38,7 +39,7 @@ Connect your Blink account in the app and complete any verification requested by
 open dist/Blinky.app
 ```
 
-The script builds the release configuration and creates `dist/Blinky.app` with a local ad hoc signature. It does not install the app in `/Applications` or use developer certificates.
+The script builds the release configuration and creates `dist/Blinky.app` with its icon and a local ad hoc signature. It does not install the app in `/Applications` or use developer certificates. Quit a running copy before opening the rebuilt application.
 
 If you have run `bootstrap.sh`, the generated app stores the path to the `.venv` interpreter in `Info.plist`. Keep the project directory at that location. If you move it, prepare the environment and build the app again. This package is intended for local use: it does not yet bundle a Python interpreter for distribution and is not notarized.
 
@@ -54,9 +55,15 @@ The interpreter must have the bridge dependencies installed. `BLINKY_BRIDGE_PATH
 
 The app includes sign-in and two-step verification, session restoration through Keychain, system and camera lists, snapshot and recording requests, system and motion detection controls, and manual MP4 clip export. The bridge implementation is in place; it still needs validation with a real account and cameras.
 
-This version retrieves clips from the cloud: up to 50 clips from the last 48 hours, with a maximum of 20 MB per download. Access depends on the recordings available to your account. Clips stored only on USB are not yet supported. See [the protocol and its limits](docs/bridge.md).
+Recordings include cloud clips and Sync Module USB clips. Cloud results are paginated without a 48-hour filter. The combined list is bounded to 500 entries, and each download is limited to 20 MB. Source failures appear as warnings and preserve the last available list. Availability still depends on your account and storage configuration. See [the protocol and its limits](docs/bridge.md).
 
-Live video is not yet implemented. Blink uses cloud services: this app does not turn the cameras into local cameras or provide continuous recording. The integration uses a community library, and changes to Blink's authentication or protocol may require an update. Frequently refreshing images or querying cameras can increase battery consumption.
+Open a camera and choose **Start live view** for video with listening audio. Sessions are bounded to 90 seconds and may end sooner when Blink closes them. Stop the view or close the camera to release it. The bridge converts the Blink stream to temporary HLS with FFmpeg and serves it only on loopback to the native player. It does not provide two-way talk or continuous recording. Real camera and relay compatibility still require account-level validation.
+
+System and motion controls wait for command completion and verify the refreshed server state. Arming enables recording on motion; it does not create an immediate clip. Enabling motion on a camera does not automatically arm the whole system. A recording request is shown as completed only after a new clip is discovered; otherwise the app reports that its availability remains unconfirmed.
+
+Choose **English**, **Español**, or **Català** in Settings. The selection takes effect immediately and is saved for future launches. The icon can be regenerated with `swift scripts/generate-icon.swift`.
+
+Blink uses cloud services and a community integration. Changes to authentication or protocol may require updates. Opening live views and requesting images frequently can increase battery consumption.
 
 ## Development and checks
 

@@ -15,28 +15,46 @@ struct ClipsView: View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Grabaciones")
+                    Text(store.text("Grabaciones"))
                         .font(.system(size: 30, weight: .bold, design: .rounded))
-                    Text("Los últimos momentos capturados por tus cámaras.")
+                    Text(store.text("Los últimos momentos capturados por tus cámaras."))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 if store.isDemo {
-                    InfoPill(title: "Demostración", symbol: "sparkles", color: .indigo)
+                    InfoPill(title: store.text("Demostración"), symbol: "sparkles", color: .indigo)
                 }
             }
 
             if store.isAuthenticated || store.isDemo {
+                if let warnings = store.snapshot.recordingWarnings, !warnings.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(warnings.enumerated()), id: \.offset) { _, warning in
+                            Label(store.text(warning), systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .foregroundStyle(.orange)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                }
+                if store.snapshot.recordingsTruncated == true {
+                    Text(store.text("La lista de grabaciones se ha limitado. Actualiza para volver a consultar."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 HStack {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Buscar por cámara", text: $search)
+                    TextField(store.text("Buscar por cámara"), text: $search)
                         .textFieldStyle(.plain)
                     if !search.isEmpty {
                         Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
                             .buttonStyle(.plain)
                             .foregroundStyle(.secondary)
-                            .accessibilityLabel("Borrar búsqueda")
+                            .accessibilityLabel(store.text("Borrar búsqueda"))
                     }
                 }
                 .padding(11)
@@ -44,11 +62,11 @@ struct ClipsView: View {
                 .frame(maxWidth: 380)
 
                 if filteredClips.isEmpty {
-                    ContentUnavailableView(search.isEmpty ? "Sin grabaciones" : "No hay coincidencias",
+                    ContentUnavailableView(search.isEmpty ? store.text(store.snapshot.recordingsStatus == "unavailable" ? "No se pudieron cargar las grabaciones" : "Sin grabaciones") : store.text("No hay coincidencias"),
                                            systemImage: search.isEmpty ? "play.rectangle" : "magnifyingglass",
                                            description: Text(search.isEmpty
-                                                ? "Los clips disponibles aparecerán aquí al actualizar. Su disponibilidad depende del almacenamiento de tu cuenta."
-                                                : "Prueba con el nombre de otra cámara."))
+                                                ? store.text("Los clips disponibles aparecerán aquí al actualizar. Su disponibilidad depende del almacenamiento de tu cuenta.")
+                                                : store.text("Prueba con el nombre de otra cámara.")))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
@@ -62,14 +80,14 @@ struct ClipsView: View {
                         }
                         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
                     }
-                    Label(store.isDemo ? "Los clips de la demo no contienen vídeo real." : "Descarga un clip para reproducirlo en tu Mac.",
+                    Label(store.isDemo ? store.text("Los clips de la demo no contienen vídeo real.") : store.text("Descarga un clip para reproducirlo en tu Mac."),
                           systemImage: "info.circle")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             } else {
-                ContentUnavailableView("Conecta tus cámaras", systemImage: "lock.shield",
-                                       description: Text("Inicia sesión en Blink desde Cámaras para consultar tus grabaciones."))
+                ContentUnavailableView(store.text("Conecta tus cámaras"), systemImage: "lock.shield",
+                                       description: Text(store.text("Inicia sesión en Blink desde Cámaras para consultar tus grabaciones.")))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -85,7 +103,12 @@ struct ClipsView: View {
                 .background(.indigo.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
             VStack(alignment: .leading, spacing: 5) {
                 Text(clip.cameraName).font(.subheadline.weight(.semibold))
-                Text(clip.createdAt.formatted(date: .abbreviated, time: .shortened))
+                if let source = clip.source {
+                    Text(store.text(source == "local" ? "USB" : "Nube"))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Text(clip.createdAt.formatted(.dateTime.day().month(.abbreviated).year().hour().minute().locale(store.language.locale)))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -98,10 +121,10 @@ struct ClipsView: View {
             Button {
                 Task { await store.download(clip) }
             } label: {
-                Label(clip.downloaded ? "Volver a descargar" : "Descargar", systemImage: "arrow.down.to.line")
+                Label(clip.downloaded ? store.text("Volver a descargar") : store.text("Descargar"), systemImage: "arrow.down.to.line")
             }
             .disabled(store.isBusy)
-            .accessibilityLabel("Descargar clip de \(clip.cameraName) del \(clip.createdAt.formatted(date: .abbreviated, time: .shortened))")
+            .accessibilityLabel(String(format: store.text("Descargar clip de %@ del %@"), clip.cameraName, clip.createdAt.formatted(.dateTime.day().month(.abbreviated).year().hour().minute().locale(store.language.locale))))
         }
         .padding(16)
     }

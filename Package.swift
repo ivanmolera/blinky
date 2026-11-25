@@ -3,10 +3,11 @@ import PackageDescription
 
 let package = Package(
     name: "Blinky",
+    defaultLocalization: "en",
     platforms: [.macOS(.v14)],
     products: [.executable(name: "Blinky", targets: ["Blinky"])],
     targets: [
-        .target(name: "BlinkyCore"),
+        .target(name: "BlinkyCore", resources: [.process("Resources")]),
         .executableTarget(
             name: "Blinky",
             dependencies: ["BlinkyCore"],

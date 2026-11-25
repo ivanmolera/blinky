@@ -16,9 +16,9 @@ struct OnboardingView: View {
                         .frame(width: 102, height: 102)
                         .background(.indigo.opacity(0.09), in: RoundedRectangle(cornerRadius: 30))
                     VStack(spacing: 8) {
-                        Text("Tu casa, desde tu Mac.")
+                        Text(store.text("Tu casa, desde tu Mac."))
                             .font(.system(size: 32, weight: .bold, design: .rounded))
-                        Text("Consulta tus cámaras Blink, revisa los últimos clips\ny controla tus sistemas desde un mismo lugar.")
+                        Text(store.text("Consulta tus cámaras Blink, revisa los últimos clips\ny controla tus sistemas desde un mismo lugar."))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -28,41 +28,41 @@ struct OnboardingView: View {
 
                 VStack(alignment: .leading, spacing: 18) {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(store.requiresTwoFactor ? "Verifica tu cuenta" : "Conecta con Blink")
+                        Text(store.requiresTwoFactor ? store.text("Verifica tu cuenta") : store.text("Conecta con Blink"))
                             .font(.title3.weight(.semibold))
                         Text(store.requiresTwoFactor
-                             ? "Introduce el código de verificación que te ha enviado Blink."
-                             : "Utiliza los datos de tu cuenta Blink.")
+                             ? store.text("Introduce el código de verificación que te ha enviado Blink.")
+                             : store.text("Utiliza los datos de tu cuenta Blink."))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
 
                     if store.requiresTwoFactor {
-                        TextField("Código de verificación", text: $store.verificationCode)
+                        TextField(store.text("Código de verificación"), text: $store.verificationCode)
                             .textContentType(.oneTimeCode)
                             .focused($focusedField, equals: .code)
                             .onSubmit { verify() }
                         Button { verify() } label: {
                             HStack {
                                 Spacer()
-                                Text("Verificar y conectar")
+                                Text(store.text("Verificar y conectar"))
                                 Spacer()
                             }
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(store.isBusy || store.verificationCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        Button("Volver a iniciar sesión") {
+                        Button(store.text("Volver a iniciar sesión")) {
                             Task { await store.disconnect() }
                         }
                         .buttonStyle(.link)
                         .disabled(store.isBusy)
                     } else {
                         VStack(alignment: .leading, spacing: 12) {
-                            TextField("Correo electrónico", text: $store.username)
+                            TextField(store.text("Correo electrónico"), text: $store.username)
                                 .textContentType(.username)
                                 .focused($focusedField, equals: .username)
                                 .onSubmit { focusedField = .password }
-                            SecureField("Contraseña", text: $store.password)
+                            SecureField(store.text("Contraseña"), text: $store.password)
                                 .textContentType(.password)
                                 .focused($focusedField, equals: .password)
                                 .onSubmit { connect() }
@@ -70,7 +70,7 @@ struct OnboardingView: View {
                         Button { connect() } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: "lock.fill")
-                                Text("Conectar cuenta")
+                                Text(store.text("Conectar cuenta"))
                             }
                             .frame(maxWidth: .infinity)
                         }
@@ -78,7 +78,7 @@ struct OnboardingView: View {
                         .disabled(store.isBusy || store.username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.password.isEmpty)
                     }
 
-                    Label("La sesión se guarda en el llavero de este Mac.", systemImage: "key.horizontal")
+                    Label(store.text("La sesión se guarda en el llavero de este Mac."), systemImage: "key.horizontal")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -92,9 +92,9 @@ struct OnboardingView: View {
 
                 if !store.requiresTwoFactor {
                     HStack(spacing: 5) {
-                        Text("¿Quieres echar un vistazo?")
+                        Text(store.text("¿Quieres echar un vistazo?"))
                             .foregroundStyle(.secondary)
-                        Button("Explorar la demo") {
+                        Button(store.text("Explorar la demo")) {
                             store.startDemo()
                         }
                         .buttonStyle(.link)
@@ -102,7 +102,7 @@ struct OnboardingView: View {
                     }
                     .font(.subheadline)
                 }
-                Text("Primera conexión: configura el entorno de Blink en Ajustes.")
+                Text(store.text("Primera conexión: configura el entorno de Blink en Ajustes."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -4,6 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+if [[ ! -f "$ROOT/Assets/AppIcon.icns" ]]; then
+  swift "$ROOT/scripts/generate-icon.swift"
+fi
+
 swift build -c release
 BIN_DIR="$(swift build -c release --show-bin-path)"
 APP_PATH="$ROOT/dist/Blinky.app"
@@ -20,22 +24,28 @@ mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$BIN_DIR/Blinky" "$CONTENTS/MacOS/Blinky"
 chmod 755 "$CONTENTS/MacOS/Blinky"
 cp -R "$BIN_DIR/Blinky_Blinky.bundle" "$CONTENTS/Resources/"
+cp -R "$BIN_DIR/Blinky_BlinkyCore.bundle" "$CONTENTS/Resources/"
+cp "$ROOT/Assets/AppIcon.icns" "$CONTENTS/Resources/AppIcon.icns"
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleDevelopmentRegion</key><string>es</string>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleLocalizations</key><array><string>en</string><string>es</string><string>ca</string></array>
   <key>CFBundleExecutable</key><string>Blinky</string>
   <key>CFBundleIdentifier</key><string>com.ivanmolera.blinky</string>
   <key>CFBundleName</key><string>Blinky</string>
   <key>CFBundleDisplayName</key><string>Blinky</string>
+  <key>CFBundleIconFile</key><string>AppIcon.icns</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>0.2.0</string>
+  <key>CFBundleVersion</key><string>2</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSAppTransportSecurity</key>
+  <dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict>
 </plist>
 PLIST

@@ -2,20 +2,22 @@ import SwiftUI
 import AppKit
 import BlinkyCore
 
-private func cameraStatusTitle(_ status: String) -> String {
+private func cameraStatusTitle(_ status: String, language: AppLanguage) -> String {
+    func text(_ key: String) -> String { AppStrings.text(key, language: language) }
     switch status.lowercased() {
-    case "online": return "Conectada"
-    case "offline": return "Sin conexión"
-    case "unknown", "": return "Estado desconocido"
+    case "online": return text("Conectada")
+    case "offline": return text("Sin conexión")
+    case "unknown", "": return text("Estado desconocido")
     default: return status
     }
 }
 
-private func batteryTitle(_ battery: String) -> String {
+private func batteryTitle(_ battery: String, language: AppLanguage) -> String {
+    func text(_ key: String) -> String { AppStrings.text(key, language: language) }
     switch battery.lowercased() {
-    case "ok", "good": return "Correcta"
-    case "low": return "Baja"
-    case "unknown": return "Desconocida"
+    case "ok", "good": return text("Correcta")
+    case "low": return text("Baja")
+    case "unknown": return text("Desconocida")
     default: return battery
     }
 }
@@ -23,6 +25,9 @@ private func batteryTitle(_ battery: String) -> String {
 struct CameraImage: View {
     let camera: BlinkCamera
     let isDemo: Bool
+    var language: AppLanguage = .spanish
+
+    private func text(_ key: String) -> String { AppStrings.text(key, language: language) }
 
     var body: some View {
         GeometryReader { geometry in
@@ -34,7 +39,7 @@ struct CameraImage: View {
                     .scaledToFill()
                     .frame(width: geometry.size.width, height: geometry.size.height)
                     .clipped()
-                    .accessibilityLabel("Última captura de \(camera.name)")
+                    .accessibilityLabel(String(format: text("Última captura de %@"), camera.name))
             } else {
                 ZStack {
                     LinearGradient(colors: [.indigo.opacity(0.14), .cyan.opacity(0.08)],
@@ -46,7 +51,7 @@ struct CameraImage: View {
                     VStack(spacing: 10) {
                         Image(systemName: isDemo ? "house.fill" : "video.slash")
                             .font(.system(size: 32, weight: .light))
-                        Text(isDemo ? "Vista de demostración" : "Sin imagen")
+                        Text(isDemo ? text("Vista de demostración") : text("Sin imagen"))
                             .font(.caption.weight(.medium))
                     }
                     .foregroundStyle(.secondary)
@@ -61,15 +66,18 @@ struct CameraImage: View {
 struct CameraCard: View {
     let camera: BlinkCamera
     let isDemo: Bool
+    var language: AppLanguage = .spanish
     let action: () -> Void
+
+    private func text(_ key: String) -> String { AppStrings.text(key, language: language) }
 
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 0) {
-                CameraImage(camera: camera, isDemo: isDemo)
+                CameraImage(camera: camera, isDemo: isDemo, language: language)
                     .aspectRatio(16 / 9, contentMode: .fit)
                     .overlay(alignment: .topTrailing) {
-                        Text("CAPTURA")
+                        Text(text("CAPTURA"))
                             .font(.system(size: 10, weight: .semibold))
                             .tracking(0.8)
                             .padding(.horizontal, 8)
@@ -79,7 +87,7 @@ struct CameraCard: View {
                     }
                     .overlay(alignment: .bottomLeading) {
                         if camera.status.lowercased() == "offline" {
-                            Label("Sin conexión", systemImage: "wifi.slash")
+                            Label(text("Sin conexión"), systemImage: "wifi.slash")
                                 .font(.caption.weight(.medium))
                                 .padding(.horizontal, 9)
                                 .padding(.vertical, 5)
@@ -105,14 +113,14 @@ struct CameraCard: View {
                             .foregroundStyle(.tertiary)
                     }
                     HStack(spacing: 14) {
-                        Label(camera.motionEnabled.map { $0 ? "Detección activa" : "Detección pausada" } ?? "Detección desconocida",
+                        Label(camera.motionEnabled.map { $0 ? text("Detección activa") : text("Detección pausada") } ?? text("Detección desconocida"),
                               systemImage: camera.motionEnabled == nil ? "questionmark.circle" : (camera.motionEnabled == true ? "figure.walk.motion" : "pause.circle"))
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         if let battery = camera.battery {
                             Image(systemName: batterySymbol(battery))
-                                .help("Batería: \(batteryTitle(battery))")
-                                .accessibilityLabel("Batería: \(batteryTitle(battery))")
+                                .help(String(format: text("Batería: %@"), batteryTitle(battery, language: language)))
+                                .accessibilityLabel(String(format: text("Batería: %@"), batteryTitle(battery, language: language)))
                         }
                     }
                     .font(.caption)
@@ -126,7 +134,7 @@ struct CameraCard: View {
             .contentShape(RoundedRectangle(cornerRadius: 16))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Abrir cámara \(camera.name)")
+        .accessibilityLabel(String(format: text("Abrir cámara %@"), camera.name))
     }
 
     private func batterySymbol(_ battery: String) -> String {
@@ -156,27 +164,25 @@ struct CameraDetailView: View {
                         Text(camera.model).font(.subheadline).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Cerrar") { dismiss() }
+                    Button(store.text("Cerrar")) { dismiss() }
                         .keyboardShortcut(.cancelAction)
                 }
                 .padding(24)
 
-                CameraImage(camera: camera, isDemo: store.isDemo)
-                    .aspectRatio(16 / 9, contentMode: .fit)
+                LiveCameraView(store: store, camera: camera)
                     .frame(maxHeight: 340)
-                    .background(.black.opacity(0.03))
 
                 VStack(alignment: .leading, spacing: 20) {
                     HStack(spacing: 16) {
-                        detailMetric("Estado", value: cameraStatusTitle(camera.status), symbol: "video")
+                        detailMetric(store.text("Estado"), value: cameraStatusTitle(camera.status, language: store.language), symbol: "video")
                         if let battery = camera.battery {
-                            detailMetric("Batería", value: batteryTitle(battery), symbol: "battery.100percent")
+                            detailMetric(store.text("Batería"), value: batteryTitle(battery, language: store.language), symbol: "battery.100percent")
                         }
                         if let wifi = camera.wifiStrength {
-                            detailMetric("Wi-Fi", value: String(wifi), symbol: "wifi")
+                            detailMetric(store.text("Wi-Fi"), value: String(wifi), symbol: "wifi")
                         }
                         if let temperature = camera.temperatureCelsius {
-                            detailMetric("Temperatura", value: String(format: "%.1f °C", temperature), symbol: "thermometer.medium")
+                            detailMetric(store.text("Temperatura"), value: String(format: "%.1f °C", temperature), symbol: "thermometer.medium")
                         }
                         Spacer(minLength: 0)
                     }
@@ -186,8 +192,8 @@ struct CameraDetailView: View {
                         set: { enabled in Task { await store.setMotionEnabled(camera, enabled: enabled) } }
                     )) {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("Detección de movimiento").font(.subheadline.weight(.medium))
-                            Text("La grabación por movimiento también requiere que el sistema esté activado.")
+                            Text(store.text("Detección de movimiento")).font(.subheadline.weight(.medium))
+                            Text(store.text("La grabación por movimiento también requiere que el sistema esté activado."))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -195,36 +201,74 @@ struct CameraDetailView: View {
                     .toggleStyle(.switch)
                     .disabled(store.isBusy)
 
+                    if let system = store.snapshot.systems.first(where: { $0.id == camera.systemID }), system.armed != true {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: "shield.slash")
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(store.text("Sistema desarmado")).font(.subheadline.weight(.semibold))
+                                Text(store.text("Activa el sistema para que la detección genere eventos y grabaciones."))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(store.text("Activar sistema")) {
+                                Task { await store.setSystemArmed(system, armed: true) }
+                            }
+                            .disabled(store.isBusy)
+                        }
+                        .padding(12)
+                        .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
+                    }
+
                     HStack(spacing: 12) {
                         Button {
                             Task { await store.refreshThumbnail(camera) }
                         } label: {
-                            Label("Nueva captura", systemImage: "camera")
+                            Label(store.text("Nueva captura"), systemImage: "camera")
                         }
+                        .disabled(store.isBusy || store.liveSession != nil || store.isStartingLive)
                         Button {
                             Task { await store.record(camera) }
                         } label: {
-                            Label("Grabar clip", systemImage: "record.circle")
+                            Label(store.text("Grabar clip"), systemImage: "record.circle")
                         }
+                        .disabled(store.isBusy || store.liveSession != nil || store.isStartingLive)
                         Spacer()
-                        Button {} label: {
-                            Label("Directo", systemImage: "video")
+                        Button {
+                            Task {
+                                if store.liveSession != nil || store.isStartingLive { await store.stopLive() }
+                                else { await store.startLive(camera) }
+                            }
+                        } label: {
+                            Label(store.text(store.liveSession != nil || store.isStartingLive ? "Detener directo" : "Iniciar directo"), systemImage: "video")
                         }
-                        .disabled(true)
-                        .help("El vídeo en directo está pendiente de integración y validación con cámaras reales.")
+                        .disabled(store.isBusy && !store.isStartingLive)
+                        .help(store.text("El directo utiliza sesiones breves. Puedes iniciarlo de nuevo cuando termine."))
                     }
                     .controlSize(.large)
-                    .disabled(store.isBusy)
 
                     if let error = store.errorMessage {
-                        Label(error, systemImage: "exclamationmark.triangle")
+                        Label(store.text(error), systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let error = store.liveErrorMessage, error != store.errorMessage {
+                        Label(store.text(error), systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
+                    if let message = store.statusMessage {
+                        Text(store.text(message))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
                     HStack {
-                        Text(store.isDemo ? "Las acciones de la demo son simuladas." : "El directo aún no está disponible en Blinky.")
+                        Text(store.isDemo ? store.text("Las acciones de la demo son simuladas.") : store.text("Vídeo en directo con audio. Sin conversación bidireccional."))
                         Spacer()
                         if store.isBusy { ProgressView().controlSize(.small) }
                     }
@@ -233,9 +277,9 @@ struct CameraDetailView: View {
                 }
                 .padding(24)
             } else {
-                ContentUnavailableView("Cámara no disponible", systemImage: "video.slash")
+                ContentUnavailableView(store.text("Cámara no disponible"), systemImage: "video.slash")
                     .padding(40)
-                Button("Cerrar") { dismiss() }.padding(.bottom, 20)
+                Button(store.text("Cerrar")) { dismiss() }.padding(.bottom, 20)
             }
         }
         .frame(width: 660)

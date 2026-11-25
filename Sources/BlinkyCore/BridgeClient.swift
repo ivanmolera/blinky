@@ -102,7 +102,17 @@ public final class BridgeClient: @unchecked Sendable {
     private func stopProcess() {
         try? input?.close()
         input = nil
-        if let process, process.isRunning { process.terminate() }
+        if let process, process.isRunning {
+            // EOF lets the bridge close the live stream and remove temporary media.
+            let gracefulDeadline = Date().addingTimeInterval(6)
+            while process.isRunning && Date() < gracefulDeadline { Thread.sleep(forTimeInterval: 0.02) }
+            if process.isRunning {
+                process.terminate()
+                let terminationDeadline = Date().addingTimeInterval(1)
+                while process.isRunning && Date() < terminationDeadline { Thread.sleep(forTimeInterval: 0.02) }
+                if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+            }
+        }
         try? output?.close()
         output = nil
         process = nil
@@ -110,6 +120,6 @@ public final class BridgeClient: @unchecked Sendable {
     }
 
     deinit {
-        if let process, process.isRunning { process.terminate() }
+        stopProcess()
     }
 }

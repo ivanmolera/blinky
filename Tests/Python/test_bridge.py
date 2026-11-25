@@ -1,6 +1,7 @@
 """Bridge tests use fake Blink devices and never contact Blink or need credentials."""
 import base64
 import contextlib
+import datetime as dt
 import io
 import json
 import unittest
@@ -51,7 +52,7 @@ class FakeBlink:
         self.available = False
         self.sync = {}
         self.urls = SimpleNamespace(base_url="https://rest-prde.immedia-semi.com")
-        self.get_videos_metadata = AsyncMock(return_value=[])
+        self.account_id = "42"
         self.refresh = AsyncMock(return_value=True)
         self.do_http_get = AsyncMock()
 
@@ -73,7 +74,14 @@ class FakeBlink:
 def dependencies():
     return SimpleNamespace(Blink=FakeBlink, Auth=FakeAuth, ClientSession=FakeSession,
                            ClientTimeout=lambda **kwargs: object(), TwoFARequired=TwoFARequired,
-                           AuthenticationErrors=(UnauthorizedError, TokenRefreshFailed, LoginError))
+                           AuthenticationErrors=(UnauthorizedError, TokenRefreshFailed, LoginError),
+                           RecordingAPI=SimpleNamespace(
+                               request_videos=AsyncMock(return_value={"media": []}),
+                               request_local_storage_manifest=AsyncMock(return_value={"id": 501}),
+                               get_local_storage_manifest=AsyncMock(return_value={"manifest_id": 123, "clips": []}),
+                               request_local_storage_clip=AsyncMock(return_value={"id": 502}),
+                               http_post=AsyncMock(return_value={"id": 600, "network_id": "7"}),
+                               request_command_status=AsyncMock(return_value={"status_code": 908, "complete": True})))
 
 
 def camera_fixture(*, camera_id="11", name="Entrada", network_id="7"):
@@ -86,7 +94,8 @@ def camera_fixture(*, camera_id="11", name="Entrada", network_id="7"):
                              snap_picture=AsyncMock(return_value={"id": 102}),
                              record=AsyncMock(return_value={"id": 103}))
     sync = SimpleNamespace(network_id=network_id, name="Casa", arm=None,
-                           cameras={name: camera}, async_arm=AsyncMock(return_value={"id": 104}))
+                           cameras={name: camera}, async_arm=AsyncMock(return_value={"id": 104}),
+                           local_storage=False, sync_id="99", _names_table={})
     return camera, sync
 
 
@@ -184,7 +193,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         await self.login()
         await self.request("snapshot")
         await self.request("snapshot")
-        self.assertEqual(self.bridge._blink.get_videos_metadata.await_count, 1)
+        self.assertEqual(self.bridge.recording_api.request_videos.await_count, 1)
         self.assertEqual(self.bridge._blink.refresh.await_count, 0)
 
     async def test_duplicate_camera_names_in_different_networks_are_retained(self):
@@ -199,11 +208,11 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         await self.login()
         _, sync = camera_fixture()
         self.bridge._blink.sync = {"Casa": sync}
-        self.bridge._blink.get_videos_metadata.return_value = [
+        self.bridge.recording_api.request_videos.side_effect = [{"media": [
             {"id": 1, "device_id": 11, "device_name": "Entrada", "created_at": "2026-11-25T13:00:00Z", "media": "/clip/1.mp4"},
             {"id": 2, "device_id": 11, "device_name": "Entrada", "created_at": "2026-11-25T13:00:00Z", "media": "/clip/2.mp4", "deleted": True},
             {"id": 3, "device_id": 11, "device_name": "Entrada", "created_at": "2026-11-25T13:00:00Z", "media": "https://attacker.test/clip.mp4"},
-        ]
+        ]}, {"media": []}]
         result = (await self.request("snapshot"))["result"]
         self.assertEqual(len(result["clips"]), 1)
         self.assertEqual(result["clips"][0]["cameraID"], "7:default:11")
@@ -211,7 +220,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_download_uses_discovered_path_and_releases_response(self):
         await self.login()
-        self.bridge._clip_index = {"1": ("/clip/1.mp4", "blinky-camera.mp4")}
+        self.bridge._clip_index = {"1": {"source": "cloud", "address": "/clip/1.mp4", "filename": "blinky-camera.mp4"}}
         response = FakeResponse([b"video-", b"content"])
         self.bridge._blink.do_http_get.return_value = response
         result = (await self.request("download_clip", clip_id="1"))["result"]
@@ -223,7 +232,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_streaming_media_enforces_limit_even_without_content_length(self):
         await self.login()
-        self.bridge._clip_index = {"1": ("/clip/1.mp4", "camera.mp4")}
+        self.bridge._clip_index = {"1": {"source": "cloud", "address": "/clip/1.mp4", "filename": "camera.mp4"}}
         response = FakeResponse([b"12345678", b"abcdefghi"])
         self.bridge._blink.do_http_get.return_value = response
         with patch.object(bridge, "MAX_MEDIA_BYTES", 16):
@@ -236,15 +245,16 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         camera, sync = camera_fixture()
         self.bridge._blink.sync = {"Casa": sync}
         first = await self.request("refresh_thumbnail", camera_id="7:default:11")
-        self.assertEqual(first["result"], {})
+        self.assertTrue(first["result"]["completed"])
         second = await self.request("refresh_thumbnail", camera_id="7:default:11")
         self.assertEqual(second["error"]["code"], "rate_limited")
-        camera.snap_picture.assert_awaited_once()
+        self.bridge.action_api.http_post.assert_awaited_once()
+        camera.snap_picture.assert_not_awaited()
 
     async def test_command_failure_does_not_optimistically_change_state(self):
         await self.login()
         _, sync = camera_fixture()
-        sync.async_arm.return_value = None
+        self.bridge.action_api.http_post.return_value = None
         self.bridge._blink.sync = {"Casa": sync}
         result = await self.request("set_system_armed", system_id="7", armed=True)
         self.assertEqual(result["error"]["code"], "command_failed")
@@ -268,7 +278,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(exception=exception_type.__name__):
                 await self.login()
                 http = self.bridge._http
-                self.bridge._blink.get_videos_metadata.side_effect = exception_type("private-refresh https://private-url")
+                self.bridge.recording_api.request_videos.side_effect = exception_type("private-refresh https://private-url")
                 result = await self.request("snapshot")
                 self.assertEqual(result["error"]["code"], "session_expired")
                 self.assertNotIn("private-refresh", json.dumps(result))
@@ -280,10 +290,11 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_non_authentication_failure_does_not_expire_session(self):
         await self.login()
-        self.bridge._blink.get_videos_metadata.side_effect = RuntimeError("unrelated failure")
+        self.bridge.recording_api.request_videos.side_effect = RuntimeError("unrelated failure")
         http = self.bridge._http
         result = await self.request("snapshot")
-        self.assertEqual(result["error"]["code"], "blink_unavailable")
+        self.assertEqual(result["result"]["recordingsStatus"], "unavailable")
+        self.assertTrue(result["result"]["recordingWarnings"])
         self.assertTrue(self.bridge._authenticated)
         self.assertIsNotNone(self.bridge._blink)
         http.close.assert_not_awaited()
@@ -294,6 +305,156 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             result = await self.request("health")
         self.assertFalse(result["result"]["blinkpyAvailable"])
         self.assertEqual(result["result"]["bridgeVersion"], "1")
+
+    async def test_cloud_catalogue_includes_older_clips_and_follows_pages(self):
+        await self.login()
+        first = {"id": 10, "device_id": 11, "device_name": "Entrada", "created_at": "2026-11-01T13:00:00Z", "media": "/clip/10.mp4", "deleted": "false"}
+        second = {"id": 11, "device_id": 11, "device_name": "Entrada", "created_at": 1730379600000, "media": "/clip/11.mp4"}
+        self.bridge.recording_api.request_videos.side_effect = [{"media": [first]}, {"media": [second]}, {"media": []}]
+        result = (await self.request("snapshot"))["result"]
+        self.assertEqual({clip["id"] for clip in result["clips"]}, {"cloud:10", "cloud:11"})
+        self.assertTrue(all(clip["source"] == "cloud" for clip in result["clips"]))
+        calls = self.bridge.recording_api.request_videos.await_args_list
+        self.assertEqual([call.kwargs["page"] for call in calls], [1, 2, 3])
+        self.assertTrue(all(call.kwargs["time"] == 0 for call in calls))
+        self.assertEqual(result["recordingsStatus"], "ready")
+
+    async def test_raw_cloud_dictionary_collection_and_datetime_are_normalized(self):
+        await self.login()
+        item = {"id": 10, "device_id": 11, "device_name": "Entrada", "created_at": dt.datetime(2026, 11, 1, 13, tzinfo=dt.timezone.utc), "media": "/clip/10.mp4"}
+        self.bridge.recording_api.request_videos.side_effect = [{"media": {"10": item}}, {"media": []}]
+        result = (await self.request("snapshot"))["result"]
+        self.assertEqual(result["clips"][0]["createdAt"], "2026-11-01T13:00:00Z")
+
+    async def setup_local_catalogue(self, *, include_cloud=False):
+        await self.login()
+        _, sync = camera_fixture(name="Puerta Entrada")
+        sync.local_storage = True
+        sync._names_table = {"PuertaEntrada": "Puerta Entrada"}
+        self.bridge._blink.sync = {"Casa": sync}
+        manifest = {"version": "1.0", "manifest_id": "123", "clips": [
+            {"id": "866333964", "size": "234", "camera_name": "PuertaEntrada", "created_at": "2026-11-01T13:00:00"}]}
+        self.bridge.recording_api.get_local_storage_manifest.return_value = manifest
+        if include_cloud:
+            self.bridge.recording_api.request_videos.side_effect = [{"media": [
+                {"id": "866333964", "device_id": 11, "device_name": "Puerta Entrada", "created_at": "2026-11-01T13:00:00Z", "media": "/clip/1.mp4"}]}, {"media": []}]
+        result = (await self.request("snapshot"))["result"]
+        return result
+
+    async def test_usb_catalogue_loads_without_cloud_subscription_and_does_not_download(self):
+        result = await self.setup_local_catalogue()
+        self.assertEqual(len(result["clips"]), 1)
+        clip = result["clips"][0]
+        self.assertEqual(clip["source"], "local")
+        self.assertEqual(clip["cameraName"], "Puerta Entrada")
+        self.assertEqual(clip["cameraID"], "7:default:11")
+        self.assertEqual(clip["createdAt"], "2026-11-01T13:00:00Z")
+        self.bridge.recording_api.request_local_storage_clip.assert_not_awaited()
+        self.bridge._blink.do_http_get.assert_not_awaited()
+        self.assertEqual(result["recordingsStatus"], "ready")
+
+    async def test_cloud_and_usb_ids_do_not_collide(self):
+        result = await self.setup_local_catalogue(include_cloud=True)
+        self.assertEqual(len(result["clips"]), 2)
+        self.assertEqual({clip["source"] for clip in result["clips"]}, {"cloud", "local"})
+        self.assertEqual(len({clip["id"] for clip in result["clips"]}), 2)
+
+    async def test_usb_download_prepares_then_reads_without_deleting(self):
+        snapshot = await self.setup_local_catalogue()
+        clip_id = snapshot["clips"][0]["id"]
+        response = FakeResponse([b"local-video"])
+        self.bridge._blink.do_http_get.return_value = response
+        result = (await self.request("download_clip", clip_id=clip_id))["result"]
+        self.assertEqual(base64.b64decode(result["dataBase64"]), b"local-video")
+        self.bridge.recording_api.request_local_storage_clip.assert_awaited_once_with(self.bridge._blink, "7", "99", "123", "866333964")
+        self.assertEqual(self.bridge._blink.do_http_get.await_args.args[0], "/api/v1/accounts/42/networks/7/sync_modules/99/local_storage/manifest/123/clip/request/866333964")
+        response.release.assert_called_once()
+        self.assertTrue(self.bridge._clips[0]["downloaded"])
+
+    async def test_usb_failure_keeps_last_known_recordings_and_reports_warning(self):
+        before = await self.setup_local_catalogue()
+        self.bridge._last_metadata = float("-inf")
+        self.bridge.recording_api.request_local_storage_manifest.return_value = None
+        after = (await self.request("snapshot"))["result"]
+        self.assertEqual(after["clips"], before["clips"])
+        self.assertEqual(after["recordingsStatus"], "partial")
+        self.assertTrue(after["recordingWarnings"])
+
+    async def test_cloud_api_failure_has_visible_unavailable_status(self):
+        await self.login()
+        self.bridge.recording_api.request_videos.return_value = None
+        result = (await self.request("snapshot"))["result"]
+        self.assertEqual(result["clips"], [])
+        self.assertEqual(result["recordingsStatus"], "unavailable")
+        self.assertTrue(result["recordingWarnings"])
+
+    async def test_cloud_page_failure_keeps_successfully_fetched_recordings(self):
+        await self.login()
+        item = {"id": 10, "device_id": 11, "device_name": "Entrada", "created_at": "2026-11-01T13:00:00Z", "media": "/clip/10.mp4"}
+        self.bridge.recording_api.request_videos.side_effect = [{"media": [item]}, None]
+        result = (await self.request("snapshot"))["result"]
+        self.assertEqual(len(result["clips"]), 1)
+        self.assertEqual(result["recordingsStatus"], "partial")
+        self.assertTrue(result["recordingWarnings"])
+
+    async def test_cloud_pagination_is_bounded_and_exposes_truncation(self):
+        await self.login()
+        def page_response(blink, *, time, page):
+            return {"media": [{"id": page, "device_name": "Entrada", "created_at": "2026-11-01T13:00:00Z", "media": f"/clip/{page}.mp4"}]}
+        self.bridge.recording_api.request_videos.side_effect = page_response
+        with patch.object(bridge, "MAX_CLOUD_PAGES", 2):
+            result = (await self.request("snapshot"))["result"]
+        self.assertEqual(len(result["clips"]), 2)
+        self.assertTrue(result["recordingsTruncated"])
+        self.assertEqual(self.bridge.recording_api.request_videos.await_count, 2)
+
+    async def test_pending_usb_manifest_is_retried_before_reporting_failure(self):
+        await self.login()
+        _, sync = camera_fixture()
+        sync.local_storage = True
+        self.bridge._blink.sync = {"Casa": sync}
+        self.bridge.recording_api.get_local_storage_manifest.side_effect = [
+            {"status": "pending"}, {"manifest_id": 123, "clips": []}]
+        with patch.object(bridge.asyncio, "sleep", new=AsyncMock()):
+            result = (await self.request("snapshot"))["result"]
+        self.assertEqual(self.bridge.recording_api.get_local_storage_manifest.await_count, 2)
+        self.assertEqual(result["recordingsStatus"], "ready")
+
+    async def test_incompatible_recording_metadata_does_not_silently_look_empty(self):
+        await self.login()
+        self.bridge.recording_api.request_videos.side_effect = [
+            {"media": [{"id": 1, "created_at": "broken-date", "media": "/clip/1.mp4"}]}, {"media": []}]
+        result = (await self.request("snapshot"))["result"]
+        self.assertTrue(result["recordingWarnings"])
+        self.assertNotEqual(result["recordingsStatus"], "ready")
+
+    async def test_recording_warning_does_not_include_private_exception_details(self):
+        await self.login()
+        self.bridge.recording_api.request_videos.side_effect = RuntimeError("https://private-media?token=private-access")
+        result = await self.request("snapshot")
+        self.assertTrue(result["result"]["recordingWarnings"])
+        self.assertNotIn("private-media", json.dumps(result))
+        self.assertNotIn("private-access", json.dumps(result))
+
+    async def test_usb_pending_json_is_not_exported_as_video(self):
+        snapshot = await self.setup_local_catalogue()
+        pending = FakeResponse([b'{"status":"pending"}'])
+        pending.content_type = "application/json"
+        video = FakeResponse([b"prepared-video"])
+        self.bridge._blink.do_http_get.side_effect = [pending, video]
+        with patch.object(bridge.asyncio, "sleep", new=AsyncMock()):
+            result = (await self.request("download_clip", clip_id=snapshot["clips"][0]["id"]))["result"]
+        self.assertEqual(base64.b64decode(result["dataBase64"]), b"prepared-video")
+        pending.release.assert_called_once()
+        video.release.assert_called_once()
+
+    async def test_oversized_usb_clip_is_rejected_before_uploading(self):
+        snapshot = await self.setup_local_catalogue()
+        clip_id = snapshot["clips"][0]["id"]
+        self.bridge._clip_index[clip_id]["size"] = str(bridge.MAX_MEDIA_BYTES + 1)
+        result = await self.request("download_clip", clip_id=clip_id)
+        self.assertEqual(result["error"]["code"], "media_too_large")
+        self.bridge.recording_api.request_local_storage_clip.assert_not_awaited()
 
     async def test_malformed_and_unauthenticated_requests_have_safe_errors(self):
         malformed = await self.bridge.handle_request({"id": "bad", "method": "login", "params": []})

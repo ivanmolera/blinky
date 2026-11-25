@@ -38,16 +38,17 @@ struct ContentView: View {
                         Button {
                             Task { await store.refresh() }
                         } label: {
-                            Label("Actualizar", systemImage: "arrow.clockwise")
+                            Label(store.text("Actualizar"), systemImage: "arrow.clockwise")
                         }
                         .keyboardShortcut("r", modifiers: .command)
                         .disabled(store.isBusy)
-                        .help("Actualizar cámaras y grabaciones")
+                        .help(store.text("Actualizar cámaras y grabaciones"))
                     }
                 }
             }
         }
         .tint(.indigo)
+        .environment(\.locale, store.language.locale)
         .frame(minWidth: 900, minHeight: 620)
         .sheet(item: $selectedCamera) { camera in
             CameraDetailView(store: store, cameraID: camera.id)
@@ -65,7 +66,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Blinky")
                         .font(.title2.weight(.bold))
-                    Text("Tu casa, a mano")
+                    Text(store.text("Tu casa, a mano"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -75,11 +76,11 @@ struct ContentView: View {
             .padding(.bottom, 28)
 
             VStack(spacing: 5) {
-                navigationItem("Cámaras", symbol: "square.grid.2x2", section: .cameras,
+                navigationItem(store.text("Cámaras"), symbol: "square.grid.2x2", section: .cameras,
                                count: store.snapshot.cameras.count)
-                navigationItem("Grabaciones", symbol: "play.rectangle", section: .clips,
+                navigationItem(store.text("Grabaciones"), symbol: "play.rectangle", section: .clips,
                                count: store.snapshot.clips.count)
-                navigationItem("Ajustes", symbol: "slider.horizontal.3", section: .settings)
+                navigationItem(store.text("Ajustes"), symbol: "slider.horizontal.3", section: .settings)
             }
             .padding(.horizontal, 10)
 
@@ -87,22 +88,22 @@ struct ContentView: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 if store.isDemo {
-                    Label("Modo demo", systemImage: "sparkles")
+                    Label(store.text("Modo demo"), systemImage: "sparkles")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.indigo)
-                    Text("Explora la app con datos de ejemplo.")
+                    Text(store.text("Explora la app con datos de ejemplo."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Label(store.isAuthenticated ? "Cuenta conectada" : "Sin conectar",
+                    Label(store.isAuthenticated ? store.text("Cuenta conectada") : store.text("Sin conectar"),
                           systemImage: store.isAuthenticated ? "checkmark.shield" : "lock.shield")
                         .font(.subheadline.weight(.medium))
-                    Text(store.isAuthenticated ? "Conexión gestionada en este Mac." : "Conecta tu cuenta para ver tus cámaras.")
+                    Text(store.isAuthenticated ? store.text("Conexión gestionada en este Mac.") : store.text("Conecta tu cuenta para ver tus cámaras."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 if store.isDemo || store.isAuthenticated {
-                    Button(store.isDemo ? "Salir de la demo" : "Desconectar cuenta") {
+                    Button(store.isDemo ? store.text("Salir de la demo") : store.text("Desconectar cuenta")) {
                         Task { await store.disconnect() }
                     }
                     .font(.caption)
@@ -151,21 +152,21 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 24) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Tus cámaras")
+                        Text(store.text("Tus cámaras"))
                             .font(.system(size: 30, weight: .bold, design: .rounded))
-                        Text("Una mirada a lo que más importa.")
+                        Text(store.text("Una mirada a lo que más importa."))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
                     if store.isDemo {
-                        InfoPill(title: "Demostración", symbol: "sparkles", color: .indigo)
+                        InfoPill(title: store.text("Demostración"), symbol: "sparkles", color: .indigo)
                     }
                 }
 
                 if !store.snapshot.systems.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("SISTEMAS")
+                        Text(store.text("SISTEMAS"))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                         ForEach(store.snapshot.systems) { system in
@@ -177,19 +178,19 @@ struct ContentView: View {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(system.name)
                                         .font(.subheadline.weight(.semibold))
-                                    Text(system.armed.map { $0 ? "Sistema activado" : "Sistema desactivado" } ?? "Estado desconocido")
+                                    Text(system.armed.map { $0 ? store.text("Sistema activado") : store.text("Sistema desactivado") } ?? store.text("Estado desconocido"))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Toggle("Activar sistema", isOn: Binding(
+                                Toggle(store.text("Activar sistema"), isOn: Binding(
                                     get: { system.armed ?? false },
                                     set: { armed in Task { await store.setSystemArmed(system, armed: armed) } }
                                 ))
                                 .labelsHidden()
                                 .toggleStyle(.switch)
                                 .disabled(store.isBusy)
-                                .accessibilityLabel("Activar sistema \(system.name)")
+                                .accessibilityLabel(String(format: store.text("Activar sistema %@"), system.name))
                             }
                             .padding(16)
                             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
@@ -198,13 +199,13 @@ struct ContentView: View {
                 }
 
                 if store.snapshot.cameras.isEmpty {
-                    ContentUnavailableView("No hay cámaras disponibles", systemImage: "video.slash",
-                                           description: Text("Actualiza para consultar los dispositivos de tu cuenta Blink."))
+                    ContentUnavailableView(store.text("No hay cámaras disponibles"), systemImage: "video.slash",
+                                           description: Text(store.text("Actualiza para consultar los dispositivos de tu cuenta Blink.")))
                         .frame(minHeight: 260)
                 } else {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 255), spacing: 18)], spacing: 18) {
                         ForEach(store.snapshot.cameras) { camera in
-                            CameraCard(camera: camera, isDemo: store.isDemo) {
+                            CameraCard(camera: camera, isDemo: store.isDemo, language: store.language) {
                                 store.selectedCameraID = camera.id
                                 selectedCamera = camera
                             }
@@ -212,7 +213,7 @@ struct ContentView: View {
                     }
                 }
 
-                Label("Las imágenes son capturas. El vídeo en directo aún no está disponible en Blinky.", systemImage: "info.circle")
+                Label(store.text("El directo está disponible bajo demanda en sesiones breves."), systemImage: "info.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -227,7 +228,7 @@ struct ContentView: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
-            Text(message)
+            Text(store.text(message))
                 .font(.subheadline)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -237,7 +238,7 @@ struct ContentView: View {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Cerrar aviso")
+            .accessibilityLabel(store.text("Cerrar aviso"))
         }
         .padding(14)
         .background(Color.orange.opacity(0.1))
@@ -247,16 +248,16 @@ struct ContentView: View {
         HStack(spacing: 8) {
             if store.isBusy {
                 ProgressView().controlSize(.small)
-                Text("Procesando…")
+                Text(store.text("Procesando…"))
             } else if let message = store.statusMessage {
-                Text(message)
+                Text(store.text(message))
                     .lineLimit(1)
             } else {
-                Text(store.isDemo ? "Datos de ejemplo · No se ha accedido a Blink" : "Blinky para Mac")
+                Text(store.isDemo ? store.text("Datos de ejemplo · No se ha accedido a Blink") : store.text("Blinky para Mac"))
             }
             Spacer(minLength: 10)
             if let updated = store.lastUpdated {
-                Text("Actualizado \(updated, style: .time)")
+                Text(String(format: store.text("Actualizado %@"), updated.formatted(.dateTime.hour().minute().locale(store.language.locale))))
                     .monospacedDigit()
             }
         }

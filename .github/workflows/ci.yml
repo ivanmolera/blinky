@@ -17,4 +17,6 @@ jobs:
       - name: Swift release build
         run: swift build -c release
       - name: Bridge tests without a Blink account
-        run: python3 -m unittest discover -s Tests/Python -p 'test_*.py'
+        run: |
+          python3 -m pip install -r Sources/Blinky/Bridge/requirements.txt
+          python3 -m unittest discover -s Tests/Python -p 'test_*.py'

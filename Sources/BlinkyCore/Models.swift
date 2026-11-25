@@ -5,12 +5,18 @@ public struct BlinkySnapshot: Codable, Sendable, Equatable {
     public var cameras: [BlinkCamera]
     public var clips: [BlinkClip]
     public var refreshedAt: Date?
+    public var recordingWarnings: [String]?
+    public var recordingsStatus: String?
+    public var recordingsTruncated: Bool?
 
-    public init(systems: [BlinkSystem] = [], cameras: [BlinkCamera] = [], clips: [BlinkClip] = [], refreshedAt: Date? = nil) {
+    public init(systems: [BlinkSystem] = [], cameras: [BlinkCamera] = [], clips: [BlinkClip] = [], refreshedAt: Date? = nil, recordingWarnings: [String]? = nil, recordingsStatus: String? = nil, recordingsTruncated: Bool? = nil) {
         self.systems = systems
         self.cameras = cameras
         self.clips = clips
         self.refreshedAt = refreshedAt
+        self.recordingWarnings = recordingWarnings
+        self.recordingsStatus = recordingsStatus
+        self.recordingsTruncated = recordingsTruncated
     }
 }
 
@@ -61,14 +67,18 @@ public struct BlinkClip: Codable, Identifiable, Sendable, Equatable {
     public let createdAt: Date
     public var durationSeconds: Int?
     public var downloaded: Bool
+    public var source: String?
+    public var systemID: String?
 
-    public init(id: String, cameraID: String, cameraName: String, createdAt: Date, durationSeconds: Int? = nil, downloaded: Bool = false) {
+    public init(id: String, cameraID: String, cameraName: String, createdAt: Date, durationSeconds: Int? = nil, downloaded: Bool = false, source: String? = nil, systemID: String? = nil) {
         self.id = id
         self.cameraID = cameraID
         self.cameraName = cameraName
         self.createdAt = createdAt
         self.durationSeconds = durationSeconds
         self.downloaded = downloaded
+        self.source = source
+        self.systemID = systemID
     }
 }
 
@@ -83,6 +93,7 @@ public struct BridgeHealth: Codable, Sendable {
     public let pythonVersion: String
     public let blinkpyAvailable: Bool
     public let blinkpyVersion: String?
+    public let ffmpegAvailable: Bool?
 }
 
 public struct ClipDownload: Codable, Sendable {
@@ -93,6 +104,45 @@ public struct ClipDownload: Codable, Sendable {
 
 public struct EmptyResult: Codable, Sendable {
     public init() {}
+}
+
+public struct CameraActionResult: Decodable, Sendable {
+    public let completed: Bool
+    public let commandCompleted: Bool?
+    public let recordingRequested: Bool?
+    public let recordingAvailable: Bool?
+    public let systemArmed: Bool?
+    public let message: String?
+}
+
+public struct LiveSession: Codable, Equatable, Sendable {
+    public let url: String
+    public let sessionID: String
+    public let expiresAt: Date
+    public var playbackURL: URL? { LocalPlaybackURL.validate(url) }
+}
+
+public struct LiveStatus: Codable, Sendable {
+    public let active: Bool
+    public let sessionID: String?
+    public let reason: String?
+}
+
+public enum LocalPlaybackURL {
+    /// Only the authenticated bridge's loopback HLS endpoint is a playback source.
+    public static func validate(_ value: String) -> URL? {
+        guard let components = URLComponents(string: value),
+              components.scheme == "http", components.host == "127.0.0.1",
+              let port = components.port, (1...65535).contains(port),
+              components.user == nil, components.password == nil,
+              components.query == nil, components.fragment == nil,
+              components.path.hasSuffix("/stream.m3u8"),
+              components.path.split(separator: "/").count == 2 else { return nil }
+        let capability = String(components.path.split(separator: "/")[0])
+        guard capability.count >= 16,
+              capability.unicodeScalars.allSatisfy({ CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-").contains($0) }) else { return nil }
+        return components.url
+    }
 }
 
 public extension BlinkySnapshot {

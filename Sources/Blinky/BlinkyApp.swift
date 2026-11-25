@@ -9,14 +9,15 @@ struct BlinkyApp: App {
     var body: some Scene {
         Window("Blinky", id: "main") {
             ContentView(store: store)
+                .environment(\.locale, store.language.locale)
                 .frame(minWidth: 900, minHeight: 650)
                 .task { await store.bootstrap() }
         }
         .defaultSize(width: 1180, height: 790)
         .commands {
             CommandGroup(replacing: .newItem) { }
-            CommandMenu("Cámaras") {
-                Button("Actualizar") { Task { await store.refresh() } }
+            CommandMenu(store.text("Cámaras")) {
+                Button(store.text("Actualizar")) { Task { await store.refresh() } }
                     .keyboardShortcut("r", modifiers: .command)
                     .disabled(store.isBusy || (!store.isAuthenticated && !store.isDemo))
             }
@@ -24,6 +25,7 @@ struct BlinkyApp: App {
 
         Settings {
             SettingsView(store: store)
+                .environment(\.locale, store.language.locale)
                 .frame(width: 640, height: 560)
         }
     }

@@ -26,19 +26,32 @@ final class AppStore: ObservableObject {
     @Published var statusMessage: String?
     @Published var lastUpdated: Date?
     @Published var healthDescription = "Conexión sin comprobar"
+    @Published var language: AppLanguage {
+        didSet { UserDefaults.standard.set(language.rawValue, forKey: "appLanguage") }
+    }
+    @Published var liveSession: LiveSession?
+    @Published var liveCameraID: String?
+    @Published var isStartingLive = false
+    @Published var liveErrorMessage: String?
+    @Published var ffmpegAvailable: Bool?
 
     private let vault = SessionVault()
     private var client: BridgeClient?
     private var clientPythonPath: String?
     private var bootstrapped = false
     private var exportedClipIDs: Set<String> = []
+    private var liveGeneration = UUID()
+    private var liveMonitor: Task<Void, Never>?
 
     init() {
+        language = UserDefaults.standard.string(forKey: "appLanguage").flatMap(AppLanguage.init(rawValue:)) ?? .preferred()
         pythonPath = ProcessInfo.processInfo.environment["BLINKY_PYTHON"]
             ?? UserDefaults.standard.string(forKey: "pythonPath")
             ?? Bundle.main.object(forInfoDictionaryKey: "BlinkyPythonPath") as? String
             ?? Self.discoverPython()
     }
+
+    func text(_ key: String) -> String { AppStrings.text(key, language: language) }
 
     func bootstrap() async {
         guard !bootstrapped else { return }
@@ -57,6 +70,7 @@ final class AppStore: ObservableObject {
     func startDemo() {
         guard !isBusy else { return }
         let previous = client
+        resetLiveState()
         client = nil
         clientPythonPath = nil
         Task { await previous?.stop() }
@@ -105,6 +119,7 @@ final class AppStore: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         errorMessage = nil
+        await stopLive()
         if !isDemo {
             do { try vault.delete() } catch { errorMessage = error.localizedDescription }
         }
@@ -155,6 +170,10 @@ final class AppStore: ObservableObject {
             return
         }
         await action("set_motion_enabled", parameters: ["camera_id": .string(camera.id), "enabled": .bool(enabled)], message: "Detección de movimiento actualizada.")
+        if enabled, errorMessage == nil,
+           snapshot.systems.first(where: { $0.id == camera.systemID })?.armed != true {
+            statusMessage = "Detección configurada. Activa también el sistema para recibir eventos."
+        }
     }
 
     func record(_ camera: BlinkCamera) async {
@@ -189,9 +208,94 @@ final class AppStore: ObservableObject {
         await perform {
             let bridge = try await self.connection()
             let health: BridgeHealth = try await bridge.call("health")
+            self.ffmpegAvailable = health.ffmpegAvailable
             self.healthDescription = health.blinkpyAvailable
                 ? "Python \(health.pythonVersion) · blinkpy \(health.blinkpyVersion ?? "disponible")"
                 : "Python disponible; falta blinkpy. Ejecuta scripts/bootstrap.sh."
+        }
+    }
+
+    func startLive(_ camera: BlinkCamera) async {
+        if isDemo {
+            liveErrorMessage = "La demostración no conecta con cámaras reales."
+            return
+        }
+        guard isAuthenticated, !isBusy, !isStartingLive else { return }
+        await stopLive()
+        let generation = UUID()
+        liveGeneration = generation
+        liveCameraID = camera.id
+        liveErrorMessage = nil
+        isStartingLive = true
+        await perform {
+            let bridge = try await self.connection()
+            let session: LiveSession = try await bridge.call("live_start", params: ["camera_id": .string(camera.id)])
+            guard self.liveGeneration == generation else {
+                let _: EmptyResult = try await bridge.call("live_stop")
+                return
+            }
+            guard session.playbackURL != nil else {
+                let _: EmptyResult = try await bridge.call("live_stop")
+                throw PlaybackError.invalidURL
+            }
+            self.liveSession = session
+            self.isStartingLive = false
+            self.monitorLive(using: bridge, generation: generation)
+            try await self.persistSession(using: bridge)
+        }
+        if liveGeneration == generation {
+            isStartingLive = false
+            if liveSession == nil { liveErrorMessage = errorMessage }
+        }
+    }
+
+    func stopLive() async {
+        let hadSession = liveSession != nil || isStartingLive
+        resetLiveState()
+        if hadSession, let client {
+            // Stop remains available while a stream is opening; the transport serializes it.
+            let _: EmptyResult? = try? await client.call("live_stop")
+        }
+    }
+
+    func livePlaybackFailed() async {
+        liveErrorMessage = "No se ha podido reproducir el vídeo en directo."
+        await stopLive()
+    }
+
+    private func resetLiveState() {
+        liveGeneration = UUID()
+        liveMonitor?.cancel()
+        liveMonitor = nil
+        liveSession = nil
+        liveCameraID = nil
+        isStartingLive = false
+    }
+
+    private func monitorLive(using bridge: BridgeClient, generation: UUID) {
+        liveMonitor?.cancel()
+        liveMonitor = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(2))
+                    guard let self, self.liveGeneration == generation, self.liveSession != nil else { return }
+                    let status: LiveStatus = try await bridge.call("live_status")
+                    if !status.active {
+                        self.liveSession = nil
+                        self.isStartingLive = false
+                        self.statusMessage = "La sesión en directo ha terminado."
+                        if ["failed", "encoder_stopped"].contains(status.reason ?? "") {
+                            self.liveErrorMessage = "No se ha podido reproducir el vídeo en directo."
+                        }
+                        return
+                    }
+                } catch {
+                    guard !Task.isCancelled, let self, self.liveGeneration == generation else { return }
+                    self.liveErrorMessage = "No se ha podido reproducir el vídeo en directo."
+                    await self.stopLive()
+                    return
+                }
+            }
         }
     }
 
@@ -199,9 +303,12 @@ final class AppStore: ObservableObject {
         guard isAuthenticated else { return }
         await perform {
             let bridge = try await self.connection()
-            let _: EmptyResult = try await bridge.call(method, params: parameters)
+            let result: CameraActionResult = try await bridge.call(method, params: parameters)
             try await self.persistSession(using: bridge)
-            self.statusMessage = message
+            self.statusMessage = result.message ?? message
+            if result.recordingRequested == true && result.recordingAvailable == false {
+                self.errorMessage = result.message ?? "Blink no ha confirmado el resultado del comando."
+            }
             try await self.loadSnapshot(using: bridge)
         }
     }
@@ -274,11 +381,13 @@ final class AppStore: ObservableObject {
                 isAuthenticated = false
                 requiresTwoFactor = false
                 snapshot = .init()
+                resetLiveState()
             }
             if error is BridgeClientError {
                 isAuthenticated = false
                 requiresTwoFactor = false
                 snapshot = .init()
+                resetLiveState()
             }
         }
     }
@@ -291,5 +400,10 @@ final class AppStore: ObservableObject {
 
     private struct RuntimeConfigurationError: LocalizedError {
         var errorDescription: String? { "Cierra la sesión antes de cambiar el intérprete de Python." }
+    }
+
+    private enum PlaybackError: LocalizedError {
+        case invalidURL
+        var errorDescription: String? { "La dirección de reproducción no es válida." }
     }
 }
