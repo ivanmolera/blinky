@@ -1,10 +1,12 @@
-Public Blink IMMIS trust certificate
+Public Blink video relay trust certificate
 
 This directory contains public certificate data only, not a private key.
-Blinky uses this reviewed anchor only for global IP-addressed IMMIS video
-endpoints on TCP port 443 returned by the authenticated Blink account API.
-It is never installed in system trust or used for account API connections.
-DNS endpoints keep the platform's normal public-CA and hostname verification.
+Blinky uses this reviewed anchor for global IP-addressed IMMIS relays on TCP
+port 443 and legacy RTSPS relays on ports 332 and 443 returned by the
+authenticated Blink account API. It is never installed in system trust or used
+for account API connections. DNS endpoints keep public-CA trust and hostname
+verification. Only legacy RTSPS endpoints on approved Blink DNS names can
+also use this anchor under normal hostname verification.
 IP relay connections retain CERT_REQUIRED and normal certificate-chain,
 signature and validity checks. This legacy certificate has no IP SAN; instead
 of a DNS hostname match, the peer must present the exact reviewed DER hash

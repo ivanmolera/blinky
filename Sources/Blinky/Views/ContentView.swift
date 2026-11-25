@@ -73,18 +73,20 @@ struct ContentView: View {
             }
             .padding(.horizontal, 18)
             .padding(.top, 22)
-            .padding(.bottom, 28)
+            .padding(.bottom, 24)
 
-            VStack(spacing: 5) {
-                navigationItem(store.text("Cámaras"), symbol: "square.grid.2x2", section: .cameras,
-                               count: store.snapshot.cameras.count)
-                navigationItem(store.text("Grabaciones"), symbol: "play.rectangle", section: .clips,
-                               count: store.snapshot.clips.count)
-                navigationItem(store.text("Ajustes"), symbol: "slider.horizontal.3", section: .settings)
+            ScrollView {
+                VStack(spacing: 5) {
+                    navigationItem(store.text("Cámaras"), symbol: "square.grid.2x2", section: .cameras,
+                                   count: store.snapshot.cameras.count)
+                    navigationItem(store.text("Grabaciones"), symbol: "play.rectangle", section: .clips,
+                                   count: store.snapshot.clips.count)
+                    navigationItem(store.text("Ajustes"), symbol: "slider.horizontal.3", section: .settings)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
             }
-            .padding(.horizontal, 10)
-
-            Spacer()
+            .frame(maxHeight: .infinity, alignment: .top)
 
             VStack(alignment: .leading, spacing: 10) {
                 if store.isDemo {
@@ -116,6 +118,8 @@ struct ContentView: View {
             .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
             .padding(12)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .safeAreaPadding(.top, 12)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.45))
     }
 

@@ -421,6 +421,62 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["recordingsTruncated"])
         self.assertEqual(self.bridge.recording_api.request_videos.await_count, 2)
 
+    async def test_cloud_first_page_alias_does_not_hide_later_recordings(self):
+        await self.login()
+        first = {"id": 7, "created_at": "2026-11-25T13:00:00Z", "media": "/clip/7.mp4"}
+        second = {"id": 8, "created_at": "2026-11-25T12:00:00Z", "media": "/clip/8.mp4"}
+        self.bridge.recording_api.request_videos.side_effect = [
+            {"media": [first]}, {"media": [dict(first, id="7", media="/clip/7.mp4?token=changed")]},
+            {"media": [second]}, {"media": []},
+        ]
+        result = (await self.request("snapshot"))["result"]
+        self.assertEqual([clip["id"] for clip in result["clips"]], ["cloud:7", "cloud:8"])
+        self.assertEqual(result["recordingsStatus"], "ready")
+        self.assertFalse(result["recordingWarnings"])
+
+    async def test_terminal_repeated_cloud_page_is_not_a_pagination_failure(self):
+        await self.login()
+        item = {"id": 7, "created_at": "2026-11-25T13:00:00Z", "media": "/clip/7.mp4"}
+        self.bridge.recording_api.request_videos.side_effect = [
+            {"media": [item]}, {"media": [item]}, {"media": [item], "has_more": False},
+        ]
+        result = (await self.request("snapshot"))["result"]
+        self.assertEqual([clip["id"] for clip in result["clips"]], ["cloud:7"])
+        self.assertFalse(result["recordingsTruncated"])
+        self.assertFalse(result["recordingWarnings"])
+
+    async def test_repeated_cloud_pages_stop_and_preserve_retrieved_clips(self):
+        await self.login()
+        item = {"id": 7, "created_at": "2026-11-25T13:00:00Z", "media": "/clip/7.mp4"}
+        self.bridge.recording_api.request_videos.return_value = {"media": [item]}
+        result = (await self.request("snapshot"))["result"]
+        self.assertEqual([clip["id"] for clip in result["clips"]], ["cloud:7"])
+        self.assertEqual(result["recordingsStatus"], "partial")
+        self.assertTrue(result["recordingsTruncated"])
+        self.assertTrue(result["recordingWarnings"])
+        self.assertEqual(self.bridge.recording_api.request_videos.await_count, 3)
+
+    async def test_malformed_cloud_rows_keep_cache_and_allow_later_pages(self):
+        await self.login()
+        saved = {"id": 7, "created_at": "2026-11-25T12:00:00Z", "media": "/clip/7.mp4"}
+        removed = dict(saved, id=8, media="/clip/8.mp4")
+        api = self.bridge.recording_api.request_videos
+        api.side_effect = [{"media": [saved, removed], "has_more": False}]
+        await self.request("snapshot")
+
+        api.side_effect = [
+            {"media": [dict(saved, created_at="invalid"), {"id": 8, "deleted": "true"}]},
+            {"media": [dict(saved, id=9, media="/clip/9.mp4")]},
+            {"media": []},
+        ]
+        result = (await self.request("snapshot", refresh_recordings=True))["result"]
+        self.assertEqual({clip["id"] for clip in result["clips"]}, {"cloud:7", "cloud:9"})
+        self.assertEqual(result["recordingsStatus"], "partial")
+        self.assertFalse(result["recordingsTruncated"])
+        self.assertEqual(result["recordingWarnings"], [
+            "Algunas grabaciones de la nube tienen datos incompletos o incompatibles y no se han podido mostrar.",
+        ])
+
     async def test_pending_usb_manifest_is_retried_before_reporting_failure(self):
         await self.login()
         _, sync = camera_fixture()

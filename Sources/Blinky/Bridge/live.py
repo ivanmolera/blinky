@@ -28,6 +28,7 @@ import re
 import secrets
 import shutil
 import signal
+import socket
 import ssl
 import struct
 import tempfile
@@ -41,6 +42,10 @@ MAX_SESSION_SECONDS = 90.0
 FRAME_HEADER = struct.Struct(">BII")
 _VENDOR_CA_PATH = Path(__file__).with_name("Certificates") / "blink-immis.pem"
 _VENDOR_CA_SHA256 = "b1bfa71ba445f0de14172a1382db19e8848f93b850eb78bd13fdabc1be7e2481"
+_UNSUPPORTED_FORMAT = "Blink ha devuelto un formato de vídeo en directo que Blinky no admite."
+_INCOMPLETE_SESSION = "Blink ha devuelto datos incompletos para abrir el vídeo en directo."
+_UNSUPPORTED_RELAY = "Blink ha devuelto una dirección de vídeo en directo incompatible."
+_LEGACY_RELAY_PORTS = {332, 443}
 
 
 class LiveError(Exception):
@@ -52,19 +57,51 @@ class LiveError(Exception):
         self.message = message
 
 
-def video_tls_identity(host: str, port: int = 443) -> tuple[ssl.SSLContext, str]:
-    """Use an explicit certificate pin profile only for public IP video relays."""
+def _is_public_address(address) -> bool:
+    return address.is_global and not address.is_multicast
+
+
+def _validate_legacy_relay(host: str, port: int) -> None:
+    if port not in _LEGACY_RELAY_PORTS:
+        raise LiveError("live_relay_unsupported", _UNSUPPORTED_RELAY)
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
-        return ssl.create_default_context(), host
-    if not address.is_global or port != 443:
-        raise LiveError("live_unsupported", "Blink no ha proporcionado una sesión de vídeo compatible.")
+        suffix = ".immedia-semi.com"
+        if host == "immedia-semi.com" or (host.endswith(suffix) and re.fullmatch(r"[a-z0-9.-]+", host)):
+            return
+    else:
+        if _is_public_address(address) and "%" not in host:
+            return
+    raise LiveError("live_relay_unsupported", _UNSUPPORTED_RELAY)
+
+
+def _read_vendor_certificate() -> str:
     try:
         certificate = _VENDOR_CA_PATH.read_text(encoding="ascii")
         der = ssl.PEM_cert_to_DER_cert(certificate)
-        if hashlib.sha256(der).hexdigest() != _VENDOR_CA_SHA256:
-            raise ValueError
+        if hashlib.sha256(der).hexdigest() == _VENDOR_CA_SHA256:
+            return certificate
+    except (OSError, UnicodeError, ValueError):
+        pass
+    raise LiveError("live_tls_config", "No se ha podido cargar la identidad segura del vídeo de Blink. Vuelve a instalar Blinky.")
+
+
+def video_tls_identity(host: str, port: int = 443, *, legacy: bool = False) -> tuple[ssl.SSLContext, str]:
+    """Use an explicit certificate pin profile only for public IP video relays."""
+    if legacy:
+        _validate_legacy_relay(host, port)
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        context = ssl.create_default_context()
+        if legacy:
+            context.load_verify_locations(cadata=_read_vendor_certificate())
+        return context, host
+    if not _is_public_address(address) or (not legacy and port != 443) or "%" in host:
+        raise LiveError("live_relay_unsupported", _UNSUPPORTED_RELAY)
+    try:
+        certificate = _read_vendor_certificate()
         # This legacy certificate has no IP SAN. Chain and validity verification
         # remain enabled; _connect_source additionally requires the exact
         # independently reviewed peer DER before it can send stream credentials.
@@ -131,18 +168,34 @@ class MediaSource:
     auth_header: bytes = field(repr=False)
     poll_seconds: float
     duration: float
+    transport: str = "immis"
+    address: str | None = field(default=None, repr=False)
 
     @classmethod
     def from_response(cls, camera, response: dict) -> "MediaSource":
         try:
             address = response["server"]
-            if not isinstance(address, str) or len(address) > 4096:
+            if not isinstance(address, str) or not re.fullmatch(r"[!-~]{1,4096}", address):
                 raise ValueError
             target = urlparse(address)
-            if target.scheme != "immis" or not target.hostname or target.username or target.password or target.fragment:
+            if target.scheme not in {"immis", "rtsps"}:
+                raise LiveError("live_unsupported", _UNSUPPORTED_FORMAT)
+            if not target.hostname or target.username is not None or target.password is not None or "#" in address:
                 raise ValueError
-            port = target.port or 443
-            client_id = int(parse_qs(target.query)["client_id"][0])
+            poll = min(30.0, max(5.0, _seconds(response.get("polling_interval"), 15.0)))
+            duration = min(MAX_SESSION_SECONDS, _seconds(response.get("session_duration", response.get("duration")), MAX_SESSION_SECONDS))
+            if target.scheme == "rtsps":
+                port = target.port if target.port is not None else 443
+                _validate_legacy_relay(target.hostname, port)
+                marker = parse_qs(target.query, keep_blank_values=True).get("blinkRTSP")
+                if not target.path.strip("/") or marker not in (["true"], ["1"]):
+                    raise LiveError("live_unsupported", _UNSUPPORTED_FORMAT)
+                return cls(target.hostname, port, b"", poll, duration, transport="rtsps", address=address)
+            port = target.port if target.port is not None else 443
+            client_ids = parse_qs(target.query, keep_blank_values=True).get("client_id", ["0"])
+            if len(client_ids) != 1 or not re.fullmatch(r"[0-9]{1,10}", client_ids[0]):
+                raise ValueError
+            client_id = int(client_ids[0])
             if not 0 <= client_id <= 0xFFFFFFFF:
                 raise ValueError
             serial = camera.serial
@@ -150,21 +203,19 @@ class MediaSource:
             token = response.get("liveview_token", response.get("liveViewToken", "")) or ""
             if not isinstance(serial, str) or not serial or not connection or not isinstance(token, str):
                 raise ValueError
-            def string_field(value: str, width: int) -> bytes:
+            def string_field(value: str, width: int, *, truncate: bool = False) -> bytes:
                 encoded = value.encode("utf-8")
-                if len(encoded) > width or b"\x00" in encoded:
+                if (len(encoded) > width and not truncate) or b"\x00" in encoded:
                     raise ValueError
-                return struct.pack(">I", width) + encoded.ljust(width, b"\x00")
+                return struct.pack(">I", width) + encoded[:width].ljust(width, b"\x00")
             header = b"".join((
                 struct.pack(">I", 40), string_field(serial, 16),
                 struct.pack(">I", client_id), b"\x01\x08", string_field(token, 64),
-                string_field(connection, 16), struct.pack(">I", 1),
+                string_field(connection, 16, truncate=True), struct.pack(">I", 1),
             ))
-            return cls(target.hostname, port, header,
-                       min(30.0, max(5.0, _seconds(response.get("polling_interval"), 15.0))),
-                       min(MAX_SESSION_SECONDS, _seconds(response.get("session_duration", response.get("duration")), MAX_SESSION_SECONDS)))
+            return cls(target.hostname, port, header, poll, duration)
         except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
-            raise LiveError("live_unsupported", "Blink no ha proporcionado una sesión de vídeo compatible.") from None
+            raise LiveError("live_session_incomplete", _INCOMPLETE_SESSION) from None
 
 
 async def read_packet(reader: asyncio.StreamReader, timeout: float = 15.0):
@@ -248,20 +299,26 @@ class LiveManager:
                 session = _Session(blink, str(camera.sync.network_id), response.get("command_id"),
                                    tempfile.TemporaryDirectory(prefix="blinky-live-"))
                 self._session = session
+                if response.get("server") in (None, ""):
+                    raise LiveError("live_unavailable", "Blink no ha podido iniciar el vídeo. La cámara puede estar ocupada.")
                 source = MediaSource.from_response(camera, response)
                 lifetime = min(self._max_duration, source.duration)
                 session.deadline = time.monotonic() + lifetime
                 session.expires_at = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=lifetime)).isoformat(timespec="seconds").replace("+00:00", "Z")
                 stage = "source"
                 session.reader, session.writer = await asyncio.wait_for(self._connect_source(source), 15.0)
-                session.writer.write(source.auth_header)
-                await asyncio.wait_for(session.writer.drain(), 5.0)
+                if source.transport == "immis":
+                    session.writer.write(source.auth_header)
+                    await asyncio.wait_for(session.writer.drain(), 5.0)
                 stage = "encoder"
                 session.process = await self._create_ffmpeg(session, executable)
                 stage = "listener"
                 await self._start_http(session)
-                self._watch(session, lambda: self._pump(session), "ended")
-                self._watch(session, lambda: self._keepalive(session), "ended")
+                if source.transport == "rtsps":
+                    self._watch(session, lambda: self._pump_legacy(session, source.address), "ended")
+                else:
+                    self._watch(session, lambda: self._pump(session), "ended")
+                    self._watch(session, lambda: self._keepalive(session), "ended")
                 self._watch(session, lambda: self._poll(session, source.poll_seconds), "ended")
                 self._watch(session, session.process.wait, "encoder_stopped")
                 self._watch(session, lambda: self._lease(session), "expired")
@@ -305,10 +362,14 @@ class LiveManager:
         return await api.request_command_done(session.blink, session.network_id, session.command_id)
 
     async def _connect_source(self, source):
-        context, identity = video_tls_identity(source.host, source.port)
-        reader, writer = await asyncio.open_connection(source.host, source.port,
-                                                       ssl=context, server_hostname=identity,
-                                                       ssl_handshake_timeout=10.0)
+        legacy = source.transport == "rtsps"
+        context, identity = video_tls_identity(source.host, source.port, legacy=legacy)
+        if legacy and context.check_hostname:
+            reader, writer = await self._open_public_relay(source, context, identity)
+        else:
+            reader, writer = await asyncio.open_connection(source.host, source.port,
+                                                           ssl=context, server_hostname=identity,
+                                                           ssl_handshake_timeout=10.0)
         if not context.check_hostname:
             try:
                 peer = writer.get_extra_info("ssl_object")
@@ -322,6 +383,20 @@ class LiveManager:
                     await asyncio.wait_for(writer.wait_closed(), 2.0)
                 raise _stage_failure(ssl.SSLCertVerificationError(), "source") from None
         return reader, writer
+
+    async def _open_public_relay(self, source, context, identity):
+        # Resolve once and connect by number so a later lookup cannot change the destination.
+        records = await asyncio.get_running_loop().getaddrinfo(source.host, source.port, type=socket.SOCK_STREAM)
+        addresses = list(dict.fromkeys(entry[4][0] for entry in records))
+        for address in [address for address in addresses if _is_public_address(ipaddress.ip_address(address))][:4]:
+            try:
+                return await asyncio.open_connection(address, source.port, ssl=context,
+                                                     server_hostname=identity, ssl_handshake_timeout=5.0)
+            except ssl.SSLError:
+                raise
+            except OSError:
+                continue
+        raise OSError("Blink relay could not be reached")
 
     async def _create_ffmpeg(self, session, executable):
         folder = Path(session.directory.name)
@@ -370,8 +445,21 @@ class LiveManager:
                 return
             message_type, payload = packet
             if message_type == 0 and payload.startswith(b"\x47"):
-                session.process.stdin.write(payload)
-                await asyncio.wait_for(session.process.stdin.drain(), 5.0)
+                await self._write_media(session, payload)
+
+    async def _pump_legacy(self, session, address):
+        from legacy_rtsp import LegacyRTSPError, stream_mpegts
+        if address is None:
+            raise LiveError("live_session_incomplete", _INCOMPLETE_SESSION)
+        try:
+            await stream_mpegts(session.reader, session.writer, address,
+                                lambda payload: self._write_media(session, payload))
+        except LegacyRTSPError:
+            raise LiveError("live_legacy_protocol", "El servidor de vídeo antiguo de Blink no ha iniciado una transmisión compatible.") from None
+
+    async def _write_media(self, session, payload):
+        session.process.stdin.write(payload)
+        await asyncio.wait_for(session.process.stdin.drain(), 5.0)
 
     async def _keepalive(self, session):
         sequence, ticks = 0, 0
@@ -388,12 +476,21 @@ class LiveManager:
         if session.command_id is None:
             return
         while session.active:
-            response = await asyncio.wait_for(self._request_status(session), 10.0)
-            if not isinstance(response, dict) or response.get("status_code") != 908:
-                return
-            for command in response.get("commands", []):
-                if str(command.get("id")) == str(session.command_id) and command.get("state_condition") not in {"new", "running"}:
+            try:
+                response = await asyncio.wait_for(self._request_status(session), 10.0)
+            except (OSError, TimeoutError):
+                response = None
+            if isinstance(response, dict):
+                code = response.get("status_code")
+                if code not in (None, 908, "908"):
                     return
+                if response.get("status") in {"failed", "cancelled"}:
+                    return
+                for command in response.get("commands") or []:
+                    if not isinstance(command, dict) or str(command.get("id")) != str(session.command_id):
+                        continue
+                    if command.get("state_condition") not in {None, "new", "running"}:
+                        return
             await asyncio.sleep(interval)
 
     async def _lease(self, session):

@@ -36,7 +36,11 @@
 "Blink no ha devuelto un identificador de comando válido. Actualiza el estado antes de repetir la acción." = "Blink no ha devuelto un identificador de comando válido. Actualiza el estado antes de repetir la acción.";
 "Blink no ha devuelto una lista de grabaciones válida." = "Blink no ha devuelto una lista de grabaciones válida.";
 "Blink no ha enviado vídeo reproducible a tiempo. Inténtalo más tarde." = "Blink no ha enviado vídeo reproducible a tiempo. Inténtalo más tarde.";
-"Blink no ha permitido avanzar en la lista completa de grabaciones de la nube." = "Blink no ha permitido avanzar en la lista completa de grabaciones de la nube.";
+"Blink ha devuelto páginas repetidas. Se muestran las grabaciones en la nube que se han podido cargar." = "Blink ha devuelto páginas repetidas. Se muestran las grabaciones en la nube que se han podido cargar.";
+"Blink ha devuelto un formato de vídeo en directo que Blinky no admite." = "Blink ha devuelto un formato de vídeo en directo que Blinky no admite.";
+"Blink ha devuelto datos incompletos para abrir el vídeo en directo." = "Blink ha devuelto datos incompletos para abrir el vídeo en directo.";
+"Blink ha devuelto una dirección de vídeo en directo incompatible." = "Blink ha devuelto una dirección de vídeo en directo incompatible.";
+"El servidor de vídeo antiguo de Blink no ha iniciado una transmisión compatible." = "El servidor de vídeo antiguo de Blink no ha iniciado una transmisión compatible.";
 "Blink no ha podido actualizar el estado. Inténtalo más tarde." = "Blink no ha podido actualizar el estado. Inténtalo más tarde.";
 "Blink no ha podido iniciar el vídeo. La cámara puede estar ocupada." = "Blink no ha podido iniciar el vídeo. La cámara puede estar ocupada.";
 "Blink no ha proporcionado la dirección del clip." = "Blink no ha proporcionado la dirección del clip.";

@@ -36,7 +36,11 @@
 "Blink no ha devuelto un identificador de comando válido. Actualiza el estado antes de repetir la acción." = "Blink no ha retornat un identificador de comanda vàlid. Actualitza l’estat abans de repetir l’acció.";
 "Blink no ha devuelto una lista de grabaciones válida." = "Blink no ha retornat una llista de gravacions vàlida.";
 "Blink no ha enviado vídeo reproducible a tiempo. Inténtalo más tarde." = "Blink no ha enviat vídeo reproduïble a temps. Torna-ho a provar més tard.";
-"Blink no ha permitido avanzar en la lista completa de grabaciones de la nube." = "Blink no ha permès avançar en la llista completa de gravacions del núvol.";
+"Blink ha devuelto páginas repetidas. Se muestran las grabaciones en la nube que se han podido cargar." = "Blink ha retornat pàgines repetides. Es mostren les gravacions del núvol que s’han pogut carregar.";
+"Blink ha devuelto un formato de vídeo en directo que Blinky no admite." = "Blink ha retornat un format de vídeo en directe que Blinky no admet.";
+"Blink ha devuelto datos incompletos para abrir el vídeo en directo." = "Blink ha retornat dades incompletes per obrir el vídeo en directe.";
+"Blink ha devuelto una dirección de vídeo en directo incompatible." = "Blink ha retornat una adreça de vídeo en directe incompatible.";
+"El servidor de vídeo antiguo de Blink no ha iniciado una transmisión compatible." = "El servidor de vídeo antic de Blink no ha iniciat una transmissió compatible.";
 "Blink no ha podido actualizar el estado. Inténtalo más tarde." = "Blink no ha pogut actualitzar l’estat. Torna-ho a provar més tard.";
 "Blink no ha podido iniciar el vídeo. La cámara puede estar ocupada." = "Blink no ha pogut iniciar el vídeo. La càmera pot estar ocupada.";
 "Blink no ha proporcionado la dirección del clip." = "Blink no ha proporcionat l’adreça del clip.";

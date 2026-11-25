@@ -129,6 +129,41 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
         response["liveViewToken"] = "camel-token"
         self.assertEqual(live.MediaSource.from_response(self.camera, response).auth_header[34:98].rstrip(b"\0"), b"camel-token")
 
+    def test_blink_long_connection_id_is_encoded_at_wire_width(self):
+        response = live_response()
+        response["server"] = "immis://relay.example.test:443/_34c3rs56rdgdfsdfs?client_id=47"
+        source = live.MediaSource.from_response(self.camera, response)
+        self.assertEqual(source.auth_header[102:118], b"_34c3rs56rdgdfsdfs"[:16])
+        self.assertEqual(int.from_bytes(source.auth_header[24:28], "big"), 47)
+
+    def test_immis_missing_client_id_defaults_to_zero_but_invalid_ids_fail(self):
+        response = live_response()
+        response["server"] = "immis://relay.example.test:443/connection"
+        self.assertEqual(live.MediaSource.from_response(self.camera, response).auth_header[24:28], bytes(4))
+        for query in ("client_id=", "client_id=4294967296", "client_id=1&client_id=2"):
+            response["server"] = f"immis://relay.example.test:443/connection?{query}"
+            with self.subTest(query=query), self.assertRaises(live.LiveError) as failure:
+                live.MediaSource.from_response(self.camera, response)
+            self.assertEqual(failure.exception.code, "live_session_incomplete")
+
+    def test_legacy_source_does_not_require_immis_credentials(self):
+        for host in ("legacy.immedia-semi.com", "legacy.immedia-semi.com:332"):
+            address = f"rtsps://{host}/private-session?blinkRTSP=true"
+            source = live.MediaSource.from_response(SimpleNamespace(serial=None), {"server": address})
+            self.assertEqual(source.transport, "rtsps")
+            self.assertEqual(source.port, 332 if ":332" in host else 443)
+            self.assertEqual(source.address, address)
+            self.assertEqual(source.auth_header, b"")
+            self.assertNotIn("private-session", repr(source))
+
+    def test_legacy_source_requires_validated_vendor_route(self):
+        for host in ("relay.example.test:332", "relay.immedia-semi.com:80", "127.0.0.1:332",
+                     "224.1.2.3:332", "relay.immedia-semi.com.attacker.test:332"):
+            with self.subTest(host=host), self.assertRaises(live.LiveError) as failure:
+                live.MediaSource.from_response(self.camera, {"server": f"rtsps://{host}/private-session?blinkRTSP=1"})
+            self.assertEqual(failure.exception.code, "live_relay_unsupported")
+            self.assertNotIn("private-session", str(failure.exception))
+
     def test_invalid_source_errors_never_contain_remote_credentials(self):
         response = live_response()
         response["server"] = "http://secret-user:secret-password@remote-private.test/private"
@@ -187,6 +222,21 @@ class TLSIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.verify_flags, ssl.create_default_context().verify_flags)
         self.assertNotIn(live._VENDOR_CA_SHA256,
                          {hashlib.sha256(cert).hexdigest() for cert in context.get_ca_certs(binary_form=True)})
+
+    async def test_legacy_relay_resolves_public_destination_and_preserves_tls_hostname(self):
+        host = "relay.immedia-semi.com"
+        source = live.MediaSource(host, 332, b"", 15, 90, transport="rtsps")
+        manager = live.LiveManager()
+        loop = asyncio.get_running_loop()
+        addresses = [(None, None, None, "", (address, 332)) for address in ("127.0.0.1", "8.8.8.8")]
+        with patch.object(loop, "getaddrinfo", new=AsyncMock(return_value=addresses)), \
+                patch.object(asyncio, "open_connection", new=AsyncMock(return_value=(object(), FakeWriter()))) as connect:
+            await manager._connect_source(source)
+        self.assertEqual(connect.call_args.args, ("8.8.8.8", 332))
+        self.assertEqual(connect.call_args.kwargs["server_hostname"], host)
+        self.assertTrue(connect.call_args.kwargs["ssl"].check_hostname)
+        self.assertEqual(connect.call_args.kwargs["ssl"].verify_mode, ssl.CERT_REQUIRED)
+        await manager.stop()
 
     def test_vendor_trust_is_rejected_for_private_addresses_or_unexpected_ports(self):
         for address, port in (("127.0.0.1", 443), ("10.0.0.1", 443), ("169.254.1.1", 443),
@@ -420,6 +470,13 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failure.exception.code, "live_request_timeout")
         self.assertIsNone(self.manager._session)
 
+    async def test_blink_command_with_no_media_server_is_released_with_availability_error(self):
+        self.manager._request_liveview = AsyncMock(return_value={"command_id": 77, "join_available": False})
+        with self.assertRaises(live.LiveError) as failure:
+            await self.manager.start(self.camera, object())
+        self.assertEqual(failure.exception.code, "live_unavailable")
+        self.manager.finished_command.assert_awaited_once_with(77)
+
     async def test_encoder_start_failure_is_sanitized_and_closes_media_socket(self):
         self.manager._create_ffmpeg = AsyncMock(side_effect=OSError("/private-user/secret-tool"))
         with self.assertRaises(live.LiveError) as failure:
@@ -449,6 +506,12 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
 @unittest.skipUnless(live.find_ffmpeg() and importlib.util.find_spec("aiohttp"), "FFmpeg and aiohttp required for the local HLS integration check")
 class LocalHLSTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_ffmpeg_hls_is_capability_scoped_and_cleaned_up(self):
+        await self.check_hls(legacy=False)
+
+    async def test_legacy_blink_video_reaches_the_same_hls_player(self):
+        await self.check_hls(legacy=True)
+
+    async def check_hls(self, *, legacy):
         from aiohttp import ClientSession
         executable = live.find_ffmpeg()
         generated = (await asyncio.to_thread(subprocess.run, [
@@ -459,6 +522,9 @@ class LocalHLSTests(unittest.IsolatedAsyncioTestCase):
         manager = FixtureManager(startup_timeout=5)
         manager._create_ffmpeg = live.LiveManager._create_ffmpeg.__get__(manager)
         manager._start_http = live.LiveManager._start_http.__get__(manager)
+        if legacy:
+            info = live_response() | {"server": "rtsps://relay.immedia-semi.com:332/private-session?blinkRTSP=true"}
+            manager._request_liveview = AsyncMock(return_value=info)
         camera = SimpleNamespace(serial="CAMERA123456", camera_id="11", camera_type="default",
                                  sync=SimpleNamespace(network_id="7"))
         # The fake camera splits TCP writes and stays open until the consumer closes.
@@ -466,13 +532,27 @@ class LocalHLSTests(unittest.IsolatedAsyncioTestCase):
         received_auth = asyncio.get_running_loop().create_future()
         async def camera_server(reader, writer):
             try:
-                header = await reader.readexactly(122)
-                received_auth.set_result(header)
-                framed = packet(generated)
-                for offset in range(0, len(framed), 101):
-                    writer.write(framed[offset:offset + 101])
-                    await writer.drain()
-                    await asyncio.sleep(0)
+                if legacy:
+                    requests = []
+                    for _ in range(4):
+                        request = await reader.readuntil(b"\r\n\r\n")
+                        method = request.split(b" ", 1)[0]
+                        requests.append(method)
+                        body = b"m=video 0 RTP/AVP 33\r\na=rtpmap:33 MP2T/90000\r\n" if method == b"DESCRIBE" else b""
+                        writer.write(b"RTSP/1.0 200 OK\r\nCSeq: 1\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
+                        await writer.drain()
+                    received_auth.set_result(requests)
+                    for offset in range(0, len(generated), 1316):
+                        rtp = b"\x80\x21" + bytes(10) + generated[offset:offset + 1316]
+                        writer.write(b"$\0" + len(rtp).to_bytes(2, "big") + rtp)
+                        await writer.drain()
+                else:
+                    received_auth.set_result(await reader.readexactly(122))
+                    framed = packet(generated)
+                    for offset in range(0, len(framed), 101):
+                        writer.write(framed[offset:offset + 101])
+                        await writer.drain()
+                        await asyncio.sleep(0)
                 await reader.read()
             finally:
                 writer.close()
@@ -484,7 +564,10 @@ class LocalHLSTests(unittest.IsolatedAsyncioTestCase):
         manager._connect_source = connect_source
         try:
             result = await manager.start(camera, object(), executable)
-            self.assertIn(b"private-media-token", await received_auth)
+            if legacy:
+                self.assertEqual(await received_auth, [b"OPTIONS", b"DESCRIBE", b"SETUP", b"PLAY"])
+            else:
+                self.assertIn(b"private-media-token", await received_auth)
             folder = Path(manager._session.directory.name)
             self.assertEqual(folder.stat().st_mode & 0o777, 0o700)
             async with ClientSession() as client:

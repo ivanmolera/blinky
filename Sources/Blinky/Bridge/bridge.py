@@ -89,6 +89,23 @@ def known_bool(value):
     return None
 
 
+def _recording_deleted(item):
+    deleted = item.get("deleted", False)
+    return deleted is True or deleted == 1 or str(deleted).lower() in {"true", "1"}
+
+
+def _cloud_page_identity(items):
+    """Track raw API rows independently of clip parsing and signed media URLs."""
+    keys = []
+    for item in items:
+        raw_id = item.get("id", item.get("clip_id")) if isinstance(item, dict) else None
+        if isinstance(raw_id, (str, int)) and not isinstance(raw_id, bool):
+            keys.append(("id", str(raw_id), str(_recording_deleted(item))))
+        else:
+            keys.append(("row", json.dumps(item, separators=(",", ":"), sort_keys=True)))
+    return tuple(sorted(keys))
+
+
 class BridgeError(Exception):
     """An explicitly safe error message that can be shown to the user."""
     def __init__(self, code: str, message: str):
@@ -358,8 +375,7 @@ class BlinkBridge:
     def _clip_record(self, item, cameras, *, source, sync=None, manifest_id=None):
         if not isinstance(item, dict):
             raise ValueError("Invalid recording entry")
-        deleted = item.get("deleted", False)
-        if deleted is True or deleted == 1 or str(deleted).lower() in {"true", "1"}:
+        if _recording_deleted(item):
             return None
         created_at = iso_date(item.get("created_at", item.get("createdAt", item.get("time"))))
         if created_at is None:
@@ -403,7 +419,9 @@ class BlinkBridge:
         return await self._recording_call(lambda: self.recording_api.http_get(self._blink, url), deadline)
 
     async def _cloud_recordings(self, cameras, deadline):
-        records, index, warnings = [], {}, []
+        records, index, warnings = {}, {}, []
+        seen_pages, deleted_ids = set(), set()
+        repeated_pages = 0
         truncated, complete = False, True
         for page in range(MAX_CLOUD_PAGES):
             try:
@@ -418,29 +436,44 @@ class BlinkBridge:
                 break
             if not items:
                 break
-            previous_count = len(index)
-            invalid_count = 0
+            page_identity = _cloud_page_identity(items)
+            repeated_pages = repeated_pages + 1 if page_identity in seen_pages else 0
+            seen_pages.add(page_identity)
+            malformed = False
             for item in items:
                 try:
                     result = self._clip_record(item, cameras, source="cloud")
                     if result is None:
+                        raw_id = item.get("id", item.get("clip_id"))
+                        if raw_id is not None:
+                            identifier = f"cloud:{raw_id}"
+                            deleted_ids.add(identifier)
+                            records.pop(identifier, None)
+                            index.pop(identifier, None)
                         continue
                     record, entry = result
-                    index[record["id"]] = entry
-                    records.append(record)
+                    identifier = record["id"]
+                    if identifier not in deleted_ids:
+                        index[identifier] = entry
+                        records[identifier] = record
                 except (ValueError, TypeError, BridgeError):
-                    invalid_count += 1
-            if invalid_count:
+                    malformed = True
+            if malformed:
                 warnings.append("Algunas grabaciones de la nube tienen datos incompletos o incompatibles y no se han podido mostrar.")
-            if len(index) == previous_count and any(isinstance(item, dict) and not item.get("deleted") for item in items):
-                warnings.append("Blink no ha permitido avanzar en la lista completa de grabaciones de la nube.")
                 complete = False
-                break
             if isinstance(response, dict) and response.get("has_more") is False:
+                break
+            # Some implementations return the same first page for both page bases.
+            # Try the next page before treating an initial overlap as a stall.
+            if repeated_pages >= 2:
+                warnings.append("Blink ha devuelto páginas repetidas. Se muestran las grabaciones en la nube que se han podido cargar.")
+                truncated = True
+                complete = False
                 break
             if page == MAX_CLOUD_PAGES - 1:
                 truncated = True
-        return records, index, warnings, truncated, complete
+                complete = False
+        return list(records.values()), index, warnings, truncated, complete, deleted_ids
 
     async def _local_recordings(self, sync, cameras, deadline):
         requested = await self._recording_call(
@@ -487,7 +520,7 @@ class BlinkBridge:
             return
         cameras = list(self._cameras())
         deadline = now + (budget if budget is not None else RECORDING_FETCH_SECONDS)
-        records, index, warnings, truncated, cloud_complete = await self._cloud_recordings(cameras, deadline)
+        records, index, warnings, truncated, cloud_complete, deleted_ids = await self._cloud_recordings(cameras, deadline)
         successful_sources = int(cloud_complete)
         failed_local = set()
         local_systems = [sync for sync in self._blink.sync.values() if getattr(sync, "local_storage", False) is True]
@@ -513,7 +546,7 @@ class BlinkBridge:
             old_entry = self._clip_index.get(old_record["id"], {})
             preserve = old_entry.get("source") == "cloud" and not cloud_complete
             preserve = preserve or (old_entry.get("source") == "local" and old_entry.get("networkID") in failed_local)
-            if preserve and old_record["id"] not in index:
+            if preserve and old_record["id"] not in index and old_record["id"] not in deleted_ids:
                 records.append(old_record)
                 index[old_record["id"]] = old_entry
         unique_records = {record["id"]: record for record in records}
