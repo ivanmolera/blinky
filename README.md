@@ -2,12 +2,20 @@
 
 A native macOS app for accessing your Blink cameras from your Mac. The interface uses SwiftUI and connects to Blink through a small Python process using [blinkpy](https://github.com/fronzbot/blinkpy). This is an independent project, with no affiliation with Blink or Amazon.
 
-## Requirements
+## Quick start
 
 - macOS 14 or later.
 - Xcode 15.3 or later, with Swift 5.10 or later.
 - Python 3.10 or later to connect a Blink account. Demo mode does not require Python.
 - FFmpeg for live video. Standard Homebrew locations are detected automatically; `BLINKY_FFMPEG` can select another executable.
+
+From the repository directory, run the following commands to create a local Python environment, build Blinky, and open the app.
+
+```bash
+./scripts/bootstrap.sh
+./scripts/build-app.sh
+open dist/Blinky.app
+```
 
 ## Try the demo
 
@@ -34,12 +42,7 @@ Connect your Blink account in the app and complete any verification requested by
 
 ## Build an app for Finder
 
-```sh
-./scripts/build-app.sh
-open dist/Blinky.app
-```
-
-The script builds the release configuration and creates `dist/Blinky.app` with its icon and a local ad hoc signature. It does not install the app in `/Applications` or use developer certificates. Quit a running copy before opening the rebuilt application.
+The build script creates a release build at `dist/Blinky.app` with its icon and a local ad hoc signature. It does not install the app in `/Applications` or use developer certificates. Quit a running copy before opening the rebuilt application.
 
 If you have run `bootstrap.sh`, the generated app stores the path to the `.venv` interpreter in `Info.plist`. Keep the project directory at that location. If you move it, prepare the environment and build the app again. This package is intended for local use: it does not yet bundle a Python interpreter for distribution and is not notarized.
 
