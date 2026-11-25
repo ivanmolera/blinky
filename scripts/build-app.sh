@@ -40,7 +40,7 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# La app de desarrollo reutiliza el entorno local; no distribuye Python.
+# The development app reuses the local environment; it does not bundle Python.
 if [[ -x "$ROOT/.venv/bin/python3" ]]; then
   plutil -insert BlinkyPythonPath -string "$ROOT/.venv/bin/python3" \
     "$CONTENTS/Info.plist"

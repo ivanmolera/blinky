@@ -1,43 +1,43 @@
-# Conector local de Blink
+# Local Blink bridge
 
-Blinky utiliza `blinkpy==0.25.9`, una biblioteca comunitaria para la nube de Blink. La app nativa ejecuta `bridge.py` como proceso hijo, sin abrir un puerto HTTP. Se requiere Python 3.10 o posterior; el entorno se prepara con `scripts/bootstrap.sh`.
+Blinky uses `blinkpy==0.25.9`, a community library for Blink's cloud service. The native app runs `bridge.py` as a child process without opening an HTTP port. Python 3.10 or later is required; prepare the environment with `scripts/bootstrap.sh`.
 
-## Protocolo
+## Protocol
 
-Cada petición y respuesta ocupa una línea JSON. Petición: `{"id":"identificador","method":"health","params":{}}`. Respuesta: `{"id":"identificador","result":{...}}` o `{"id":"identificador","error":{"code":"codigo","message":"mensaje seguro"}}`.
+Each request and response occupies one JSON line. Request: `{"id":"identifier","method":"health","params":{}}`. Response: `{"id":"identifier","result":{...}}` or `{"id":"identifier","error":{"code":"code","message":"safe message"}}`.
 
-El canal contiene datos confidenciales y no debe registrarse. El puente descarta stdout/stderr de bibliotecas externas y silencia sus logs, que pueden contener direcciones autenticadas o identificadores. No acepta rutas de descarga ni URLs proporcionadas por el cliente: `download_clip` solo acepta el ID de un clip previamente descubierto en la cuenta.
+The channel contains sensitive data and must not be logged. The bridge discards stdout/stderr from external libraries and silences their logs, which may contain authenticated URLs or identifiers. It does not accept download paths or URLs supplied by the client: `download_clip` only accepts the ID of a clip previously discovered in the account.
 
-| Método | Parámetros | Resultado |
+| Method | Parameters | Result |
 | --- | --- | --- |
-| `health` | Ninguno | Versiones de puente/Python/blinkpy y disponibilidad del conector; funciona sin blinkpy instalado. |
-| `login` | `username`, `password` | `status`, `message` y `session`; puede requerir `requires_2fa`. |
-| `verify` | `code` | Completa la verificación iniciada por `login`. |
-| `restore` | `session` | Restaura una sesión mediante su refresh token, sin contraseña. |
-| `session` | Ninguno | Última sesión, incluidos los tokens renovados durante una operación. |
-| `logout` | Ninguno | Descarta la sesión del proceso y cierra las conexiones locales. |
-| `snapshot` | Ninguno | `systems`, `cameras`, `clips`, `refreshedAt`. |
-| `set_system_armed` | `system_id`, `armed` (booleano) | Solicita activar/desactivar el sistema. |
-| `set_motion_enabled` | `camera_id`, `enabled` (booleano) | Solicita activar/desactivar la detección de movimiento. |
-| `refresh_thumbnail` | `camera_id` | Solicita una nueva imagen a la cámara. |
-| `record` | `camera_id` | Solicita un clip; no inicia grabación continua. |
-| `download_clip` | `clip_id` | `dataBase64`, `mimeType`, `filename` para exportación por la app. |
+| `health` | None | Bridge/Python/blinkpy versions and bridge availability; works without blinkpy installed. |
+| `login` | `username`, `password` | `status`, `message`, and `session`; may return `requires_2fa`. |
+| `verify` | `code` | Completes the verification started by `login`. |
+| `restore` | `session` | Restores a session using its refresh token, without a password. |
+| `session` | None | Current session, including tokens refreshed during an operation. |
+| `logout` | None | Discards the process session and closes local connections. |
+| `snapshot` | None | `systems`, `cameras`, `clips`, `refreshedAt`. |
+| `set_system_armed` | `system_id`, `armed` (boolean) | Requests arming or disarming the system. |
+| `set_motion_enabled` | `camera_id`, `enabled` (boolean) | Requests enabling or disabling motion detection. |
+| `refresh_thumbnail` | `camera_id` | Requests a new image from the camera. |
+| `record` | `camera_id` | Requests a clip; does not start continuous recording. |
+| `download_clip` | `clip_id` | `dataBase64`, `mimeType`, `filename` for export by the app. |
 
-`session` es una cadena que contiene un objeto JSON, preparada para el llavero de macOS. El puente no crea archivos de credenciales, sesiones ni medios. La contraseña y el PIN se eliminan al finalizar la autenticación y se excluyen de la sesión serializada. El cliente debe guardar la sesión de `login`/`verify`/`restore` y volver a consultar `session` después de operaciones para persistir la rotación de tokens. Un refresh token revocado exige volver a iniciar sesión; no hay reintento automático con contraseña.
+`session` is a string containing a JSON object, suitable for storage in macOS Keychain. The bridge does not create credential, session, or media files. The password and PIN are removed when authentication completes and are excluded from the serialized session. The client must store the session returned by `login`/`verify`/`restore` and query `session` again after operations to persist token rotation. A revoked refresh token requires signing in again; there is no automatic retry with a password.
 
-Los IDs de cámaras son opacos: `<network_id>:<camera_type>:<camera_id>`. Los estados `armed` y `motionEnabled` pueden ser `null` cuando Blink no los informa; no deben interpretarse como desactivados. `updatedAt` solo se proporciona si puede extraerse la fecha de la imagen de Blink; `refreshedAt` indica la actualización del estado, no la fecha de captura de todas las imágenes.
+Camera IDs are opaque: `<network_id>:<camera_type>:<camera_id>`. The `armed` and `motionEnabled` states may be `null` when Blink does not report them; they must not be interpreted as disabled. `updatedAt` is only provided when the image timestamp can be extracted from Blink's image URL; `refreshedAt` indicates when the state was refreshed, not when every image was captured.
 
-## Límites de la primera versión
+## Initial version limits
 
-- Estado y lista de clips: caché de al menos 60 segundos. Un cambio explícito permite una actualización adicional para comprobar el resultado. Las peticiones de nueva imagen o clip tienen un intervalo mínimo de 60 segundos por cámara. La detección no es una notificación en tiempo real.
-- Clips: se consultan como máximo las dos primeras páginas de la nube (hasta 50 elementos) de las últimas 48 horas. El acceso depende de las grabaciones disponibles para la cuenta. Los clips solo almacenados en USB no se consultan en esta versión.
-- Cada descarga se limita a 20 MB y la lectura HTTP se realiza por bloques. No se proporciona vídeo en directo, grabación continua, audio bidireccional ni descarga automática.
-- `logout` es una desconexión local; no garantiza revocar tokens en los servidores de Blink. La app debe eliminar también la sesión del llavero.
-- La biblioteca usa interfaces privadas de Blink, que pueden cambiar. Las pruebas automatizadas sustituyen la cuenta y las cámaras; la compatibilidad real requiere probar una cuenta del usuario.
+- State and clip lists are cached for at least 60 seconds. An explicit change allows an additional refresh to check the result. New image or clip requests have a minimum interval of 60 seconds per camera. Detection does not provide real-time notifications.
+- Clips: queries cover at most the first two cloud pages (up to 50 items) from the last 48 hours. Access depends on the recordings available to the account. Clips stored only on USB are not queried in this version.
+- Each download is limited to 20 MB, and HTTP responses are read in chunks. Live video, continuous recording, two-way audio, and automatic downloads are not provided.
+- `logout` disconnects locally; it does not guarantee token revocation on Blink's servers. The app must also remove the session from Keychain.
+- The library uses private Blink interfaces, which may change. Automated tests use substitutes for the account and cameras; real compatibility requires testing with the user's account.
 
-## Fuentes verificadas
+## Verified sources
 
-- [Release blinkpy v0.25.9](https://github.com/fronzbot/blinkpy/releases/tag/v0.25.9).
-- [Autenticación y atributos de sesión de esa release](https://github.com/fronzbot/blinkpy/blob/v0.25.9/blinkpy/auth.py).
-- [Inicio, verificación y metadatos de clips](https://github.com/fronzbot/blinkpy/blob/v0.25.9/blinkpy/blinkpy.py).
-- [Métodos de cámara](https://github.com/fronzbot/blinkpy/blob/v0.25.9/blinkpy/camera.py).
+- [blinkpy v0.25.9 release](https://github.com/fronzbot/blinkpy/releases/tag/v0.25.9).
+- [Authentication and session attributes in this release](https://github.com/fronzbot/blinkpy/blob/v0.25.9/blinkpy/auth.py).
+- [Startup, verification, and clip metadata](https://github.com/fronzbot/blinkpy/blob/v0.25.9/blinkpy/blinkpy.py).
+- [Camera methods](https://github.com/fronzbot/blinkpy/blob/v0.25.9/blinkpy/camera.py).

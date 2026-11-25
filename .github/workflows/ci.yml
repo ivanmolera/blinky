@@ -12,9 +12,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Pruebas Swift
+      - name: Swift tests
         run: swift test
-      - name: Compilación Swift
+      - name: Swift release build
         run: swift build -c release
-      - name: Pruebas del puente sin cuenta Blink
+      - name: Bridge tests without a Blink account
         run: python3 -m unittest discover -s Tests/Python -p 'test_*.py'
