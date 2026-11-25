@@ -1,0 +1,93 @@
+Public Blink IMMIS trust certificate
+
+This directory contains public certificate data only, not a private key.
+Blinky uses this reviewed anchor only for global IP-addressed IMMIS video
+endpoints on TCP port 443 returned by the authenticated Blink account API.
+It is never installed in system trust or used for account API connections.
+DNS endpoints keep the platform's normal public-CA and hostname verification.
+IP relay connections retain CERT_REQUIRED and normal certificate-chain,
+signature and validity checks. This legacy certificate has no IP SAN; instead
+of a DNS hostname match, the peer must present the exact reviewed DER hash
+below before any stream authentication bytes are sent. There is no automatic
+certificate acceptance, trust-on-first-use, or verification-disabled fallback.
+
+Certificate DER SHA-256:
+b1bfa71ba445f0de14172a1382db19e8848f93b850eb78bd13fdabc1be7e2481
+Subject and issuer: Amazon / Blink / *.immedia-semi.com
+Validity: 2016-12-31 23:00:00 UTC through 2039-01-17 23:00:00 UTC.
+
+Source certificate:
+https://github.com/centauri/blink-camera-relay/blob/016555459d5390fbd8d718eaff2a6fed579289b0/bridge/certificates/blink-immis.pem
+Provenance report:
+https://github.com/centauri/blink-camera-relay/blob/main/bridge/certificates/PROVENANCE.txt
+
+The source project reports an identical 1037-byte DER certificate embedded
+at offset 0x92914 in lib/arm64-v8a/libwalnut.so from Blink's Android APK.
+It reports successful APK Signature Scheme v3 verification with Google
+ApkVerifier 8.13.0 and the following production APK signer SHA-256:
+ca5b36d12fe84935dd7de849fe9f7fd318b8a413b95ec200b38e73f4fd0cdaf2
+Blinky development independently checked this signer against Blink's
+HTTPS app association at https://applinks.blink.com/.well-known/assetlinks.json.
+The source reports required certificate verification and the logical service
+name *.immedia-semi.com in the signed application's native IMMIS client.
+Those APK signature and native-library observations are attributed to the
+source project; this repository does not redistribute or independently audit
+the APK or native library.
+
+The same certificate is included in madmachinations/blink's vendor anchors:
+https://github.com/madmachinations/blink/blob/main/custom_components/blink_live/blink_live_client/immis_ca.pem
+Its vendor notice attributes the trust anchors to Dr Andrew Cox's
+homebridge-blink-cameras-new-api. The relevant notices are retained below.
+
+Certificate updates require independent provenance review. A certificate
+observed on a failed connection is never automatically accepted.
+
+--- Blink Camera Relay source licence ---
+MIT License
+
+Copyright (c) 2026 Blink Camera Relay contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--- Upstream public vendor trust anchor notice ---
+IMMIS wire layout and public vendor trust anchors adapted from
+homebridge-blink-cameras-new-api by Dr Andrew Cox.
+https://github.com/sealad886/homebridge-blink-cameras-new-api
+
+MIT License
+
+Copyright (c) 2026 Dr Andrew Cox
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

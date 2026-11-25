@@ -17,6 +17,9 @@ import atexit
 import asyncio
 import contextlib
 import datetime as dt
+import hashlib
+import hmac
+import ipaddress
 import json
 import math
 import os
@@ -36,6 +39,8 @@ import uuid
 MAX_FRAME_BYTES = 2 * 1024 * 1024
 MAX_SESSION_SECONDS = 90.0
 FRAME_HEADER = struct.Struct(">BII")
+_VENDOR_CA_PATH = Path(__file__).with_name("Certificates") / "blink-immis.pem"
+_VENDOR_CA_SHA256 = "b1bfa71ba445f0de14172a1382db19e8848f93b850eb78bd13fdabc1be7e2481"
 
 
 class LiveError(Exception):
@@ -45,6 +50,54 @@ class LiveError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def video_tls_identity(host: str, port: int = 443) -> tuple[ssl.SSLContext, str]:
+    """Use an explicit certificate pin profile only for public IP video relays."""
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return ssl.create_default_context(), host
+    if not address.is_global or port != 443:
+        raise LiveError("live_unsupported", "Blink no ha proporcionado una sesión de vídeo compatible.")
+    try:
+        certificate = _VENDOR_CA_PATH.read_text(encoding="ascii")
+        der = ssl.PEM_cert_to_DER_cert(certificate)
+        if hashlib.sha256(der).hexdigest() != _VENDOR_CA_SHA256:
+            raise ValueError
+        # This legacy certificate has no IP SAN. Chain and validity verification
+        # remain enabled; _connect_source additionally requires the exact
+        # independently reviewed peer DER before it can send stream credentials.
+        # Account APIs and ordinary DNS endpoints retain normal hostname checks.
+        context = ssl.create_default_context(cadata=certificate)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.check_hostname = False
+        return context, host
+    except (OSError, UnicodeError, ValueError, ssl.SSLError):
+        raise LiveError("live_tls_config", "No se ha podido cargar la identidad segura del vídeo de Blink. Vuelve a instalar Blinky.") from None
+
+
+def _stage_failure(error: BaseException, stage: str) -> LiveError:
+    """Classify failures without rendering exception strings or private URLs."""
+    if type(error).__name__ in {"UnauthorizedError", "TokenRefreshFailed", "LoginError", "BlinkTwoFARequiredError"}:
+        return LiveError("session_expired", "La sesión ha caducado. Vuelve a conectar tu cuenta Blink.")
+    if isinstance(error, ssl.SSLCertVerificationError):
+        return LiveError("live_tls_verification", "No se ha podido verificar el certificado del servidor de vídeo de Blink. Actualiza Blinky e inténtalo de nuevo.")
+    if isinstance(error, ssl.SSLError):
+        return LiveError("live_tls_failed", "No se ha podido establecer una conexión segura con el servidor de vídeo de Blink.")
+    if stage == "source":
+        if isinstance(error, asyncio.TimeoutError):
+            return LiveError("live_connect_timeout", "El servidor de vídeo de Blink no ha respondido a tiempo. Inténtalo de nuevo.")
+        return LiveError("live_connect_failed", "No se ha podido conectar con el servidor de vídeo de Blink. Revisa la conexión e inténtalo de nuevo.")
+    if stage == "encoder":
+        return LiveError("live_encoder_failed", "No se ha podido iniciar el conversor de vídeo. Comprueba que FFmpeg funciona en este Mac.")
+    if stage == "listener":
+        return LiveError("live_local_server_failed", "No se ha podido iniciar el reproductor de vídeo local. Cierra Blinky y vuelve a abrirlo.")
+    if stage == "request":
+        if isinstance(error, asyncio.TimeoutError):
+            return LiveError("live_request_timeout", "Blink ha tardado demasiado en preparar el vídeo. Inténtalo de nuevo.")
+        return LiveError("live_request_failed", "Blink no ha podido preparar el vídeo de esta cámara. Inténtalo de nuevo.")
+    return LiveError("live_stream_failed", "La transmisión de vídeo de Blink se ha interrumpido. Inténtalo de nuevo.")
 
 
 def find_ffmpeg(path: str | None = None) -> str | None:
@@ -153,6 +206,7 @@ class _Session:
     active: bool = True
     ready: bool = False
     reason: str | None = None
+    failure: LiveError | None = field(default=None, repr=False)
     last_request: float = field(default_factory=time.monotonic)
 
     def result(self) -> dict:
@@ -186,6 +240,7 @@ class LiveManager:
             if not executable:
                 raise LiveError("missing_ffmpeg", "El vídeo en directo necesita FFmpeg. Instálalo y vuelve a abrir Blinky.")
             session = None
+            stage = "request"
             try:
                 response = await asyncio.wait_for(self._request_liveview(camera, blink), 30.0)
                 if not isinstance(response, dict):
@@ -197,16 +252,20 @@ class LiveManager:
                 lifetime = min(self._max_duration, source.duration)
                 session.deadline = time.monotonic() + lifetime
                 session.expires_at = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=lifetime)).isoformat(timespec="seconds").replace("+00:00", "Z")
+                stage = "source"
                 session.reader, session.writer = await asyncio.wait_for(self._connect_source(source), 15.0)
                 session.writer.write(source.auth_header)
                 await asyncio.wait_for(session.writer.drain(), 5.0)
+                stage = "encoder"
                 session.process = await self._create_ffmpeg(session, executable)
+                stage = "listener"
                 await self._start_http(session)
                 self._watch(session, lambda: self._pump(session), "ended")
                 self._watch(session, lambda: self._keepalive(session), "ended")
                 self._watch(session, lambda: self._poll(session, source.poll_seconds), "ended")
                 self._watch(session, session.process.wait, "encoder_stopped")
                 self._watch(session, lambda: self._lease(session), "expired")
+                stage = "stream"
                 await self._wait_ready(session)
                 session.ready = True
                 session.last_request = time.monotonic()
@@ -218,9 +277,7 @@ class LiveManager:
                     raise
                 if isinstance(error, LiveError):
                     raise
-                if type(error).__name__ in {"UnauthorizedError", "TokenRefreshFailed", "LoginError", "BlinkTwoFARequiredError"}:
-                    raise LiveError("session_expired", "La sesión ha caducado. Vuelve a conectar tu cuenta Blink.") from None
-                raise LiveError("live_unavailable", "No se ha podido abrir el vídeo de Blink. Comprueba la conexión y vuelve a intentarlo.") from None
+                raise _stage_failure(error, stage) from None
 
     async def stop(self):
         async with self._lock:
@@ -248,8 +305,23 @@ class LiveManager:
         return await api.request_command_done(session.blink, session.network_id, session.command_id)
 
     async def _connect_source(self, source):
-        return await asyncio.open_connection(source.host, source.port,
-                                             ssl=ssl.create_default_context(), server_hostname=source.host)
+        context, identity = video_tls_identity(source.host, source.port)
+        reader, writer = await asyncio.open_connection(source.host, source.port,
+                                                       ssl=context, server_hostname=identity,
+                                                       ssl_handshake_timeout=10.0)
+        if not context.check_hostname:
+            try:
+                peer = writer.get_extra_info("ssl_object")
+                certificate = peer.getpeercert(binary_form=True) if peer else None
+                if not isinstance(certificate, bytes) or not hmac.compare_digest(
+                        hashlib.sha256(certificate).hexdigest(), _VENDOR_CA_SHA256):
+                    raise ValueError
+            except Exception:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(writer.wait_closed(), 2.0)
+                raise _stage_failure(ssl.SSLCertVerificationError(), "source") from None
+        return reader, writer
 
     async def _create_ffmpeg(self, session, executable):
         folder = Path(session.directory.name)
@@ -339,7 +411,11 @@ class LiveManager:
         deadline = min(session.deadline, time.monotonic() + self._startup_timeout)
         playlist = Path(session.directory.name) / "stream.m3u8"
         while time.monotonic() < deadline:
-            if session.reason or session.process.returncode is not None:
+            if session.failure:
+                raise session.failure
+            if session.process.returncode is not None:
+                raise _stage_failure(RuntimeError(), "encoder")
+            if session.reason:
                 break
             if playlist.is_file():
                 text = playlist.read_text(encoding="utf-8")
@@ -355,7 +431,8 @@ class LiveManager:
                 await operation()
             except asyncio.CancelledError:
                 return
-            except Exception:
+            except Exception as error:
+                session.failure = error if isinstance(error, LiveError) else _stage_failure(error, "stream")
                 reason_value = "failed"
             else:
                 reason_value = session.reason or reason

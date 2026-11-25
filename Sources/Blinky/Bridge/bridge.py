@@ -23,7 +23,7 @@ import signal
 import sys
 import time
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 from live import LiveError, LiveManager, is_ffmpeg_available
 
 BRIDGE_VERSION = "1"
@@ -35,6 +35,8 @@ MAX_LOCAL_RECORDINGS = 500
 MAX_RECORDINGS = 500
 MAX_LOCAL_SYSTEMS = 4
 RECORDING_FETCH_SECONDS = 75.0
+EXPLICIT_RECORDING_FETCH_SECONDS = 50.0
+EXPLICIT_RECORDING_REFRESH_SECONDS = 3.0
 SESSION_KEYS = frozenset({
     "username", "token", "expires_in", "expiration_date", "refresh_token",
     "host", "region_id", "client_id", "account_id", "user_id", "hardware_id",
@@ -128,6 +130,8 @@ class BlinkBridge:
         self._last_network = float("-inf")
         self._last_refresh = float("-inf")
         self._last_metadata = float("-inf")
+        self._last_explicit_metadata = float("-inf")
+        self._last_cloud_discovery_status = "unknown"
         self._last_actions = {}
         self._clip_index = {}
         self._clips = []
@@ -161,6 +165,8 @@ class BlinkBridge:
         self._last_actions.clear()
         self._last_refresh = float("-inf")
         self._last_metadata = float("-inf")
+        self._last_explicit_metadata = float("-inf")
+        self._last_cloud_discovery_status = "unknown"
         self._force_refresh = False
         self._refreshed_at = None
         if self._http is not None:
@@ -386,14 +392,23 @@ class BlinkBridge:
                          manifestID=str(manifest_id), clipID=str(raw_id), size=item.get("size"))
         return record, entry
 
+    async def _cloud_page(self, *, since=None, page=0, deadline):
+        """Use the zero-based changed-media API with an explicitly encoded UTC timestamp."""
+        timestamp = "1970-01-01T00:00:00Z" if since is None else iso_date(since)
+        if timestamp is None:
+            raise BridgeError("recordings_unavailable", "La fecha de consulta de grabaciones no es válida.")
+        query = urlencode({"since": timestamp, "page": page})
+        path = f"/api/v1/accounts/{self._blink.account_id}/media/changed?{query}"
+        url = self._blink.urls.base_url + self._safe_media_address(path)
+        return await self._recording_call(lambda: self.recording_api.http_get(self._blink, url), deadline)
+
     async def _cloud_recordings(self, cameras, deadline):
         records, index, warnings = [], {}, []
         truncated, complete = False, True
-        for page in range(1, MAX_CLOUD_PAGES + 1):
+        for page in range(MAX_CLOUD_PAGES):
             try:
                 # Query the complete retained catalogue; the old 48-hour window omitted valid clips.
-                response = await self._recording_call(
-                    lambda: self.recording_api.request_videos(self._blink, time=0, page=page), deadline)
+                response = await self._cloud_page(page=page, deadline=deadline)
                 items = self._recording_items(response, "media")
             except Exception as error:
                 if self._is_authentication_error(error):
@@ -423,7 +438,7 @@ class BlinkBridge:
                 break
             if isinstance(response, dict) and response.get("has_more") is False:
                 break
-            if page == MAX_CLOUD_PAGES:
+            if page == MAX_CLOUD_PAGES - 1:
                 truncated = True
         return records, index, warnings, truncated, complete
 
@@ -462,11 +477,16 @@ class BlinkBridge:
         warnings = ["Algunas grabaciones locales tienen datos incompletos o incompatibles y no se han podido mostrar."] if invalid_count else []
         return records, index, warnings, truncated
 
-    async def _metadata(self):
-        if time.monotonic() - self._last_metadata < POLL_SECONDS:
+    async def _metadata(self, *, force=False, budget=None):
+        now = time.monotonic()
+        if force:
+            if now - self._last_explicit_metadata < EXPLICIT_RECORDING_REFRESH_SECONDS:
+                return
+            self._last_explicit_metadata = now
+        elif now - self._last_metadata < POLL_SECONDS:
             return
         cameras = list(self._cameras())
-        deadline = time.monotonic() + RECORDING_FETCH_SECONDS
+        deadline = now + (budget if budget is not None else RECORDING_FETCH_SECONDS)
         records, index, warnings, truncated, cloud_complete = await self._cloud_recordings(cameras, deadline)
         successful_sources = int(cloud_complete)
         failed_local = set()
@@ -517,7 +537,7 @@ class BlinkBridge:
             raise BridgeError("media_unavailable", "La dirección del clip no es compatible.")
         return address
 
-    async def _snapshot(self):
+    async def _snapshot(self, *, refresh_recordings=False):
         self._require_auth()
         if self._force_refresh or time.monotonic() - self._last_refresh >= POLL_SECONDS:
             await self._network_pause()
@@ -528,7 +548,7 @@ class BlinkBridge:
                 self._force_refresh = False
             if not self._blink.available:
                 raise BridgeError("blink_unavailable", "Blink no ha podido actualizar el estado. Inténtalo más tarde.")
-        await self._metadata()
+        await self._metadata(force=refresh_recordings, budget=EXPLICIT_RECORDING_FETCH_SECONDS if refresh_recordings else None)
         systems = [{"id": str(sync.network_id), "name": sync.name, "armed": known_bool(sync.arm)}
                    for sync in self._blink.sync.values()]
         cameras = []
@@ -588,7 +608,7 @@ class BlinkBridge:
                 code = self._command_code(result[key])
                 if code not in (200, 201, 908):
                     raise self._command_error(code)
-        command_id = result.get("id")
+        command_id = result.get("id", result.get("command_id"))
         if isinstance(command_id, bool) or not isinstance(command_id, (int, str)) or not str(command_id).isdigit() or int(command_id) <= 0:
             raise BridgeError("command_unconfirmed", "Blink no ha devuelto un identificador de comando válido. Actualiza el estado antes de repetir la acción.")
 
@@ -604,23 +624,34 @@ class BlinkBridge:
         except asyncio.TimeoutError:
             raise BridgeError("command_timeout", "Blink no ha confirmado la acción a tiempo. Actualiza el estado antes de repetirla.") from None
 
-    async def _wait_for_action(self, acknowledgement, network_id, deadline):
+    async def _wait_for_action(self, acknowledgement, network_id, deadline, *, modern_fallback=False):
         """Confirm status_code 908 and complete, rather than treating an acknowledgement as success."""
         self._check_command(acknowledgement)
         command_network = acknowledgement.get("network_id", network_id)
         if str(command_network) != str(network_id):
             raise BridgeError("command_unconfirmed", "Blink ha devuelto un comando para otro sistema. Actualiza el estado.")
         status_deadline = min(deadline, time.monotonic() + 40.0)
+        command_id = acknowledgement.get("id", acknowledgement.get("command_id"))
         for attempt in range(12):
             status = await self._action_call(
-                lambda: self.action_api.request_command_status(self._blink, network_id, acknowledgement["id"]),
+                lambda: self.action_api.request_command_status(self._blink, network_id, command_id),
                 status_deadline, timeout=10.0)
+            modern_status = False
+            if modern_fallback and (not isinstance(status, dict) or not status or "status_code" not in status):
+                path = f"/accounts/{self._blink.account_id}/networks/{network_id}/commands/{command_id}"
+                url = self._blink.urls.base_url + self._safe_media_address(path)
+                response = await self._action_call(
+                    lambda: self.recording_api.http_get(self._blink, url), status_deadline, timeout=10.0)
+                if isinstance(response, dict) and ("complete" in response or "status" in response):
+                    status, modern_status = response, True
             if isinstance(status, dict):
+                if modern_status and status.get("status") == "failed":
+                    raise self._command_error()
                 code = self._command_code(status.get("status_code"))
                 if code is not None and code != 908:
                     raise self._command_error(code)
-                if known_bool(status.get("complete")) is True:
-                    if code != 908:
+                if known_bool(status.get("complete")) is True or (modern_status and status.get("status") == "complete"):
+                    if code != 908 and not modern_status:
                         raise BridgeError("command_unconfirmed", "Blink no ha confirmado el resultado del comando.")
                     return
             if attempt < 11:
@@ -683,12 +714,15 @@ class BlinkBridge:
         cameras = list(self._cameras())
         earliest = requested_at - dt.timedelta(seconds=2)
         discovery_deadline = min(deadline, time.monotonic() + 40.0)
+        cloud_checked = False
+        self._last_cloud_discovery_status = "unknown"
         for attempt in range(3):
             records, index = [], {}
             try:
-                response = await self._recording_call(
-                    lambda: self.recording_api.request_videos(self._blink, time=earliest.timestamp(), page=1), discovery_deadline)
-                for item in self._recording_items(response, "media"):
+                response = await self._cloud_page(since=earliest, page=0, deadline=discovery_deadline)
+                items = self._recording_items(response, "media")
+                cloud_checked = True
+                for item in items:
                     try:
                         result = self._clip_record(item, cameras, source="cloud")
                         if result is not None:
@@ -715,11 +749,13 @@ class BlinkBridge:
             self._merge_recordings(records, index)
             if new_clip is not None:
                 self._last_metadata = time.monotonic()
+                self._last_cloud_discovery_status = "found"
                 return new_clip
             if discovery_deadline - time.monotonic() < 5.0:
                 break
             if attempt < 2:
                 await asyncio.sleep(2.0)
+        self._last_cloud_discovery_status = "empty" if cloud_checked else "unavailable"
         return None
 
     async def _execute_action(self, method, params):
@@ -749,7 +785,7 @@ class BlinkBridge:
         endpoint, data = self._action_endpoint(method, sync, camera, requested)
         acknowledgement = await self._action_call(
             lambda: self.action_api.http_post(self._blink, endpoint, data=data), deadline)
-        await self._wait_for_action(acknowledgement, sync.network_id, deadline)
+        await self._wait_for_action(acknowledgement, sync.network_id, deadline, modern_fallback=method == "record")
         if method == "record":
             self._last_metadata = float("-inf")
             recording = await self._discover_requested_recording(identifier, sync, known_recordings, requested_at, deadline)
@@ -761,9 +797,10 @@ class BlinkBridge:
                 return {"completed": True, "commandCompleted": True, "systemArmed": system_armed,
                         "recordingRequested": True, "recordingAvailable": True, "recordingID": recording["id"],
                         "message": "La nueva grabación ya está disponible en Grabaciones."}
-            message = "Blink ha confirmado el comando, pero el clip aún no aparece. La solicitud sigue pendiente de comprobar en Grabaciones."
-            if system_armed is False:
-                message += " El sistema está desarmado."
+            if self._last_cloud_discovery_status == "unavailable":
+                message = "Blink ha confirmado el comando, pero no se ha podido comprobar el guardado en la nube. Actualiza Grabaciones."
+            else:
+                message = "Blink ha confirmado el comando, pero todavía no ha publicado el clip en la nube. Actualiza Grabaciones para comprobarlo."
             return {"completed": False, "commandCompleted": True, "systemArmed": system_armed,
                     "recordingRequested": True, "recordingAvailable": False, "message": message}
         await self._refresh_action_state(deadline)
@@ -888,7 +925,10 @@ class BlinkBridge:
         if method == "session":
             return self._auth_result("authenticated" if self._authenticated else "signed_out")
         if method == "snapshot":
-            return await self._snapshot()
+            refresh_recordings = params.get("refresh_recordings", False)
+            if not isinstance(refresh_recordings, bool):
+                raise BridgeError("invalid_request", "El formato de actualización de grabaciones no es válido.")
+            return await self._snapshot(refresh_recordings=refresh_recordings)
         if method == "live_start":
             self._require_auth()
             camera, _ = self._camera(self._require_text(params, "camera_id"))

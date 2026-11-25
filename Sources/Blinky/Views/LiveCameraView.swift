@@ -53,12 +53,13 @@ struct LiveCameraView: View {
     private func updatePlayer() {
         player?.pause()
         failureObservation = nil
-        guard let url = session?.playbackURL else { player = nil; return }
+        guard let session, let url = session.playbackURL else { player = nil; return }
+        let sessionID = session.sessionID
         let item = AVPlayerItem(url: url)
         item.preferredForwardBufferDuration = 1
         failureObservation = item.observe(\.status, options: [.new]) { item, _ in
             if item.status == .failed {
-                Task { @MainActor in await store.livePlaybackFailed() }
+                Task { @MainActor in await store.livePlaybackFailed(sessionID: sessionID) }
             }
         }
         let next = AVPlayer(playerItem: item)

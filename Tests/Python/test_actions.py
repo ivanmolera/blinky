@@ -162,8 +162,8 @@ class ActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response["commandCompleted"])
         self.assertTrue(response["recordingRequested"])
         self.assertFalse(response["recordingAvailable"])
-        self.assertIn("pendiente", response["message"])
-        self.assertIn("desarmado", response["message"])
+        self.assertIn("todavía no ha publicado", response["message"])
+        self.assertIn("nube", response["message"])
         self.assertEqual(self.bridge.recording_api.request_videos.await_count, 3)
         self.bridge._blink.do_http_get.assert_not_awaited()
 
@@ -180,6 +180,48 @@ class ActionTests(unittest.IsolatedAsyncioTestCase):
         response = (await self.request("record", camera_id="7:doorbell:11"))["result"]
         self.assertTrue(response["recordingRequested"])
         self.assertTrue(self.bridge.action_api.http_post.await_args.args[1].endswith("/networks/7/doorbells/11/clip"))
+
+    async def test_record_uses_modern_command_readback_without_repeating_post(self):
+        self.bridge.action_api.request_command_status.return_value = None
+        self.bridge.recording_api.modern_command_status.return_value = {"status": "complete"}
+        response = (await self.request("record", camera_id="7:default:11"))["result"]
+        self.assertTrue(response["commandCompleted"])
+        self.assertFalse(response["recordingAvailable"])
+        self.assertEqual(self.bridge.action_api.http_post.await_count, 1)
+        self.bridge.recording_api.modern_command_status.assert_awaited_once()
+        url = self.bridge.recording_api.modern_command_status.await_args.args[1]
+        self.assertEqual(url, "https://rest-prde.immedia-semi.com/accounts/42/networks/7/commands/600")
+
+    async def test_record_accepts_command_id_alias_with_modern_confirmation(self):
+        self.bridge.action_api.http_post.return_value = {"command_id": 777, "network_id": 7}
+        self.bridge.action_api.request_command_status.return_value = None
+        self.bridge.recording_api.modern_command_status.return_value = {"complete": True}
+        response = (await self.request("record", camera_id="7:default:11"))["result"]
+        self.assertTrue(response["commandCompleted"])
+        self.assertTrue(self.bridge.recording_api.modern_command_status.await_args.args[1].endswith("/commands/777"))
+
+    async def test_modern_record_failure_is_not_reported_as_accepted(self):
+        self.bridge.action_api.request_command_status.return_value = None
+        self.bridge.recording_api.modern_command_status.return_value = {"status": "failed"}
+        response = await self.request("record", camera_id="7:default:11")
+        self.assertEqual(response["error"]["code"], "command_failed")
+        self.bridge.recording_api.request_videos.assert_not_awaited()
+
+    async def test_record_discovery_uses_the_same_page_zero_cloud_request(self):
+        self.bridge.recording_api.request_videos.return_value = {"media": []}
+        response = (await self.request("record", camera_id="7:default:11"))["result"]
+        self.assertFalse(response["recordingAvailable"])
+        calls = self.bridge.recording_api.request_videos.await_args_list
+        self.assertTrue(all(call.kwargs["page"] == 0 for call in calls))
+        raw_calls = self.bridge.recording_api.http_get.await_args_list
+        self.assertTrue(all("Z&page=0" in call.args[1] for call in raw_calls))
+
+    async def test_cloud_check_failure_is_distinct_from_empty_cloud_catalogue(self):
+        self.bridge.recording_api.request_videos.return_value = None
+        response = (await self.request("record", camera_id="7:default:11"))["result"]
+        self.assertFalse(response["recordingAvailable"])
+        self.assertIn("no se ha podido comprobar el guardado en la nube", response["message"])
+        self.assertNotIn("sistema está desarmado", response["message"])
 
     async def test_usb_acknowledgement_validation_does_not_require_completion(self):
         self.assertIsNone(self.bridge._check_command({"id": 42}))

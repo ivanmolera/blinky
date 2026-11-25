@@ -62,12 +62,23 @@ struct ClipsView: View {
                 .frame(maxWidth: 380)
 
                 if filteredClips.isEmpty {
-                    ContentUnavailableView(search.isEmpty ? store.text(store.snapshot.recordingsStatus == "unavailable" ? "No se pudieron cargar las grabaciones" : "Sin grabaciones") : store.text("No hay coincidencias"),
-                                           systemImage: search.isEmpty ? "play.rectangle" : "magnifyingglass",
-                                           description: Text(search.isEmpty
-                                                ? store.text("Los clips disponibles aparecerán aquí al actualizar. Su disponibilidad depende del almacenamiento de tu cuenta.")
-                                                : store.text("Prueba con el nombre de otra cámara.")))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    ContentUnavailableView {
+                        let title = store.snapshot.recordingsStatus == "unavailable" ? "No se pudieron cargar las grabaciones" : "Sin grabaciones"
+                        Label(store.text(search.isEmpty ? title : "No hay coincidencias"),
+                              systemImage: search.isEmpty ? "play.rectangle" : "magnifyingglass")
+                    } description: {
+                        Text(store.text(search.isEmpty
+                             ? "Los clips disponibles aparecerán aquí al actualizar. Su disponibilidad depende del almacenamiento de tu cuenta."
+                             : "Prueba con el nombre de otra cámara."))
+                    } actions: {
+                        if search.isEmpty && store.isAuthenticated {
+                            Button(store.text("Actualizar")) {
+                                Task { await store.refresh() }
+                            }
+                            .disabled(store.isBusy)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 1) {

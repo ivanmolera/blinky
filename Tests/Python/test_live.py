@@ -1,9 +1,13 @@
 """Exercise media framing, private serving, and cleanup without Blink access."""
 import asyncio
+import hashlib
 import importlib.util
 from pathlib import Path
+import shutil
+import ssl
 import subprocess
 import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -164,6 +168,136 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await live.read_packet(reader), (10, b""))
 
 
+class TLSIdentityTests(unittest.IsolatedAsyncioTestCase):
+    def test_public_ip_uses_only_reviewed_vendor_anchor_and_explicit_pin_profile(self):
+        context, name = live.video_tls_identity("8.8.8.8")
+        self.assertEqual(name, "8.8.8.8")
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertFalse(context.check_hostname)
+        self.assertEqual(context.verify_flags, ssl.create_default_context().verify_flags)
+        anchors = context.get_ca_certs(binary_form=True)
+        self.assertEqual(len(anchors), 1)
+        self.assertEqual(hashlib.sha256(anchors[0]).hexdigest(), live._VENDOR_CA_SHA256)
+
+    def test_dns_keeps_normal_public_ca_and_hostname_verification(self):
+        context, name = live.video_tls_identity("video.example.test")
+        self.assertEqual(name, "video.example.test")
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+        self.assertEqual(context.verify_flags, ssl.create_default_context().verify_flags)
+        self.assertNotIn(live._VENDOR_CA_SHA256,
+                         {hashlib.sha256(cert).hexdigest() for cert in context.get_ca_certs(binary_form=True)})
+
+    def test_vendor_trust_is_rejected_for_private_addresses_or_unexpected_ports(self):
+        for address, port in (("127.0.0.1", 443), ("10.0.0.1", 443), ("169.254.1.1", 443),
+                              ("::1", 443), ("8.8.8.8", 80)):
+            with self.subTest(address=address, port=port), self.assertRaises(live.LiveError):
+                live.video_tls_identity(address, port)
+
+    def test_modified_or_missing_anchor_fails_closed(self):
+        with patch.object(live, "_VENDOR_CA_SHA256", "0" * 64):
+            with self.assertRaises(live.LiveError) as failure:
+                live.video_tls_identity("8.8.8.8")
+            self.assertEqual(failure.exception.code, "live_tls_config")
+        with patch.object(live, "_VENDOR_CA_PATH", Path("/missing/blinky-private-path.pem")):
+            with self.assertRaises(live.LiveError) as failure:
+                live.video_tls_identity("8.8.8.8")
+            self.assertNotIn("blinky-private-path", str(failure.exception))
+
+    async def test_connection_retains_destination_and_requires_reviewed_peer_certificate(self):
+        source = live.MediaSource("8.8.8.8", 443, b"private-auth", 15, 90)
+        manager = live.LiveManager()
+        try:
+            with patch.object(asyncio, "open_connection", new_callable=AsyncMock) as connect:
+                writer = FakeWriter()
+                reviewed_der = ssl.PEM_cert_to_DER_cert(live._VENDOR_CA_PATH.read_text())
+                writer.get_extra_info = lambda _: SimpleNamespace(getpeercert=lambda **_: reviewed_der)
+                connect.return_value = (object(), writer)
+                await manager._connect_source(source)
+            self.assertEqual(connect.call_args.args, ("8.8.8.8", 443))
+            self.assertEqual(connect.call_args.kwargs["server_hostname"], "8.8.8.8")
+            self.assertFalse(connect.call_args.kwargs["ssl"].check_hostname)
+            self.assertEqual(connect.call_args.kwargs["ssl"].verify_mode, ssl.CERT_REQUIRED)
+            self.assertEqual(writer.data, b"")
+        finally:
+            await manager.stop()
+
+    async def test_unexpected_peer_is_closed_before_stream_authentication(self):
+        source = live.MediaSource("8.8.8.8", 443, b"private-auth", 15, 90)
+        writer = FakeWriter()
+        writer.get_extra_info = lambda _: SimpleNamespace(getpeercert=lambda **_: b"different-certificate")
+        manager = live.LiveManager()
+        try:
+            with patch.object(asyncio, "open_connection", new_callable=AsyncMock) as connect:
+                connect.return_value = (object(), writer)
+                with self.assertRaises(live.LiveError) as failure:
+                    await manager._connect_source(source)
+            self.assertEqual(failure.exception.code, "live_tls_verification")
+            self.assertTrue(writer.closed)
+            self.assertEqual(writer.data, b"")
+        finally:
+            await manager.stop()
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL required to generate a local TLS fixture")
+    async def test_tls_accepts_reviewed_identity_and_rejects_unknown_certificate_before_auth(self):
+        with tempfile.TemporaryDirectory(prefix="blinky-tls-test-") as folder:
+            certificate = Path(folder) / "server.pem"
+            private_key = Path(folder) / "server.key"
+            await asyncio.to_thread(subprocess.run, [
+                shutil.which("openssl"), "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                "-keyout", str(private_key), "-out", str(certificate), "-days", "1",
+                "-subj", "/CN=*.immedia-semi.com",
+                "-addext", "subjectAltName=DNS:*.immedia-semi.com",
+            ], check=True, capture_output=True, timeout=15)
+            server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            server_context.load_cert_chain(str(certificate), str(private_key))
+            accepted = asyncio.Event()
+            loop = asyncio.get_running_loop()
+            previous_handler = loop.get_exception_handler()
+            def expected_handshake_rejection(event_loop, context):
+                # The negative fixture intentionally aborts the server handshake.
+                if isinstance(context.get("exception"), (ConnectionResetError, ssl.SSLError)):
+                    return
+                if previous_handler:
+                    previous_handler(event_loop, context)
+                else:
+                    event_loop.default_exception_handler(context)
+            loop.set_exception_handler(expected_handshake_rejection)
+            async def server_connection(reader, writer):
+                accepted.set()
+                try:
+                    await reader.read()
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+            server = await asyncio.start_server(server_connection, "127.0.0.1", 0, ssl=server_context)
+            original_connect = asyncio.open_connection
+            async def connect_fixture(host, port, **kwargs):
+                self.assertEqual((host, port), ("8.8.8.8", 443))
+                return await original_connect("127.0.0.1", server.sockets[0].getsockname()[1], **kwargs)
+            manager = live.LiveManager()
+            source = live.MediaSource("8.8.8.8", 443, b"private-auth", 15, 90)
+            try:
+                with patch.object(asyncio, "open_connection", side_effect=connect_fixture):
+                    # An unrelated self-signed certificate must not be accepted.
+                    with self.assertRaises(ssl.SSLCertVerificationError):
+                        await manager._connect_source(source)
+                    self.assertFalse(accepted.is_set())
+                    digest = hashlib.sha256(ssl.PEM_cert_to_DER_cert(certificate.read_text())).hexdigest()
+                    # This test-only anchor models the independently reviewed vendor CA.
+                    with patch.object(live, "_VENDOR_CA_PATH", certificate), \
+                            patch.object(live, "_VENDOR_CA_SHA256", digest):
+                        _, writer = await manager._connect_source(source)
+                        await asyncio.wait_for(accepted.wait(), 2)
+                        writer.close()
+                        await writer.wait_closed()
+            finally:
+                await manager.stop()
+                server.close()
+                await server.wait_closed()
+                loop.set_exception_handler(previous_handler)
+
+
 class LifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.camera = SimpleNamespace(serial="CAMERA123456", camera_id="11", camera_type="default",
@@ -260,6 +394,56 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             await self.manager.start(self.camera, object())
         self.assertNotIn("private", str(failure.exception))
         self.manager.finished_command.assert_awaited_once()
+
+    async def test_certificate_rejection_has_a_specific_safe_error_and_stops_command(self):
+        self.manager._connect_source = AsyncMock(side_effect=ssl.SSLCertVerificationError("private-token at remote-private.test"))
+        with self.assertRaises(live.LiveError) as failure:
+            await self.manager.start(self.camera, object())
+        self.assertEqual(failure.exception.code, "live_tls_verification")
+        self.assertNotIn("private", str(failure.exception))
+        self.manager.finished_command.assert_awaited_once()
+
+    async def test_connection_timeout_and_network_failure_are_distinct_from_media_timeout(self):
+        for error, code in ((asyncio.TimeoutError(), "live_connect_timeout"),
+                            (ConnectionRefusedError("private-endpoint"), "live_connect_failed")):
+            with self.subTest(code=code):
+                self.manager._connect_source = AsyncMock(side_effect=error)
+                with self.assertRaises(live.LiveError) as failure:
+                    await self.manager.start(self.camera, object())
+                self.assertEqual(failure.exception.code, code)
+                self.assertNotIn("private", str(failure.exception))
+
+    async def test_request_timeout_is_reported_before_connecting_to_media(self):
+        self.manager._request_liveview = AsyncMock(side_effect=asyncio.TimeoutError())
+        with self.assertRaises(live.LiveError) as failure:
+            await self.manager.start(self.camera, object())
+        self.assertEqual(failure.exception.code, "live_request_timeout")
+        self.assertIsNone(self.manager._session)
+
+    async def test_encoder_start_failure_is_sanitized_and_closes_media_socket(self):
+        self.manager._create_ffmpeg = AsyncMock(side_effect=OSError("/private-user/secret-tool"))
+        with self.assertRaises(live.LiveError) as failure:
+            await self.manager.start(self.camera, object())
+        self.assertEqual(failure.exception.code, "live_encoder_failed")
+        self.assertNotIn("private-user", str(failure.exception))
+        self.assertTrue(self.manager.writer.closed)
+        self.manager.finished_command.assert_awaited_once()
+
+    async def test_listener_failure_cleans_encoder_and_temporary_files(self):
+        self.manager._start_http = AsyncMock(side_effect=OSError("private-local-path"))
+        with self.assertRaises(live.LiveError) as failure:
+            await self.manager.start(self.camera, object())
+        self.assertEqual(failure.exception.code, "live_local_server_failed")
+        self.assertNotIn("private-local", str(failure.exception))
+        self.assertFalse(self.manager.last_directory.exists())
+        self.assertEqual(self.manager.encoder.returncode, 0)
+
+    async def test_encoder_exit_before_playlist_reports_encoder_error(self):
+        self.manager.encoder.finish(1)
+        with self.assertRaises(live.LiveError) as failure:
+            await self.manager.start(self.camera, object())
+        self.assertEqual(failure.exception.code, "live_encoder_failed")
+        self.assertFalse(self.manager.last_directory.exists())
 
 
 @unittest.skipUnless(live.find_ffmpeg() and importlib.util.find_spec("aiohttp"), "FFmpeg and aiohttp required for the local HLS integration check")

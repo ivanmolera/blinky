@@ -155,6 +155,12 @@ struct CameraDetailView: View {
         store.snapshot.cameras.first { $0.id == cameraID }
     }
 
+    private var sheetHeight: CGFloat {
+        let screen = NSApp.keyWindow?.screen ?? NSScreen.main
+        let availableHeight = screen?.visibleFrame.height ?? 900
+        return min(820, max(320, availableHeight - 140))
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if let camera {
@@ -169,120 +175,114 @@ struct CameraDetailView: View {
                 }
                 .padding(24)
 
-                LiveCameraView(store: store, camera: camera)
-                    .frame(maxHeight: 340)
+                ScrollView {
+                    VStack(spacing: 0) {
+                        LiveCameraView(store: store, camera: camera)
+                            .frame(height: 340)
+                            .clipped()
 
-                VStack(alignment: .leading, spacing: 20) {
-                    HStack(spacing: 16) {
-                        detailMetric(store.text("Estado"), value: cameraStatusTitle(camera.status, language: store.language), symbol: "video")
-                        if let battery = camera.battery {
-                            detailMetric(store.text("Batería"), value: batteryTitle(battery, language: store.language), symbol: "battery.100percent")
-                        }
-                        if let wifi = camera.wifiStrength {
-                            detailMetric(store.text("Wi-Fi"), value: String(wifi), symbol: "wifi")
-                        }
-                        if let temperature = camera.temperatureCelsius {
-                            detailMetric(store.text("Temperatura"), value: String(format: "%.1f °C", temperature), symbol: "thermometer.medium")
-                        }
-                        Spacer(minLength: 0)
-                    }
-
-                    Toggle(isOn: Binding(
-                        get: { camera.motionEnabled ?? false },
-                        set: { enabled in Task { await store.setMotionEnabled(camera, enabled: enabled) } }
-                    )) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(store.text("Detección de movimiento")).font(.subheadline.weight(.medium))
-                            Text(store.text("La grabación por movimiento también requiere que el sistema esté activado."))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .toggleStyle(.switch)
-                    .disabled(store.isBusy)
-
-                    if let system = store.snapshot.systems.first(where: { $0.id == camera.systemID }), system.armed != true {
-                        HStack(alignment: .top, spacing: 12) {
-                            Image(systemName: "shield.slash")
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(store.text("Sistema desarmado")).font(.subheadline.weight(.semibold))
-                                Text(store.text("Activa el sistema para que la detección genere eventos y grabaciones."))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 20) {
+                            HStack(spacing: 16) {
+                                detailMetric(store.text("Estado"), value: cameraStatusTitle(camera.status, language: store.language), symbol: "video")
+                                if let battery = camera.battery {
+                                    detailMetric(store.text("Batería"), value: batteryTitle(battery, language: store.language), symbol: "battery.100percent")
+                                }
+                                if let wifi = camera.wifiStrength {
+                                    detailMetric(store.text("Wi-Fi"), value: String(wifi), symbol: "wifi")
+                                }
+                                if let temperature = camera.temperatureCelsius {
+                                    detailMetric(store.text("Temperatura"), value: String(format: "%.1f °C", temperature), symbol: "thermometer.medium")
+                                }
+                                Spacer(minLength: 0)
                             }
-                            Spacer()
-                            Button(store.text("Activar sistema")) {
-                                Task { await store.setSystemArmed(system, armed: true) }
+
+                            Toggle(isOn: Binding(
+                                get: { camera.motionEnabled ?? false },
+                                set: { enabled in Task { await store.setMotionEnabled(camera, enabled: enabled) } }
+                            )) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(store.text("Detección de movimiento")).font(.subheadline.weight(.medium))
+                                    Text(store.text("La grabación por movimiento también requiere que el sistema esté activado."))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
+                            .toggleStyle(.switch)
                             .disabled(store.isBusy)
-                        }
-                        .padding(12)
-                        .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
-                    }
 
-                    HStack(spacing: 12) {
-                        Button {
-                            Task { await store.refreshThumbnail(camera) }
-                        } label: {
-                            Label(store.text("Nueva captura"), systemImage: "camera")
-                        }
-                        .disabled(store.isBusy || store.liveSession != nil || store.isStartingLive)
-                        Button {
-                            Task { await store.record(camera) }
-                        } label: {
-                            Label(store.text("Grabar clip"), systemImage: "record.circle")
-                        }
-                        .disabled(store.isBusy || store.liveSession != nil || store.isStartingLive)
-                        Spacer()
-                        Button {
-                            Task {
-                                if store.liveSession != nil || store.isStartingLive { await store.stopLive() }
-                                else { await store.startLive(camera) }
+                            if let system = store.snapshot.systems.first(where: { $0.id == camera.systemID }), system.armed != true {
+                                HStack(alignment: .top, spacing: 12) {
+                                    Image(systemName: "shield.slash")
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(store.text("Sistema desarmado")).font(.subheadline.weight(.semibold))
+                                        Text(store.text("Activa el sistema para que la detección genere eventos y grabaciones."))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Button(store.text("Activar sistema")) {
+                                        Task { await store.setSystemArmed(system, armed: true) }
+                                    }
+                                    .disabled(store.isBusy)
+                                }
+                                .padding(12)
+                                .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
                             }
-                        } label: {
-                            Label(store.text(store.liveSession != nil || store.isStartingLive ? "Detener directo" : "Iniciar directo"), systemImage: "video")
-                        }
-                        .disabled(store.isBusy && !store.isStartingLive)
-                        .help(store.text("El directo utiliza sesiones breves. Puedes iniciarlo de nuevo cuando termine."))
-                    }
-                    .controlSize(.large)
 
-                    if let error = store.errorMessage {
-                        Label(store.text(error), systemImage: "exclamationmark.triangle")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if let error = store.liveErrorMessage, error != store.errorMessage {
-                        Label(store.text(error), systemImage: "exclamationmark.triangle")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                            HStack(spacing: 12) {
+                                Button {
+                                    Task { await store.refreshThumbnail(camera) }
+                                } label: {
+                                    Label(store.text("Nueva captura"), systemImage: "camera")
+                                }
+                                .disabled(store.isBusy || store.liveSession != nil || store.isStartingLive)
+                                Button {
+                                    Task { await store.record(camera) }
+                                } label: {
+                                    Label(store.text("Grabar clip"), systemImage: "record.circle")
+                                }
+                                .disabled(store.isBusy || store.liveSession != nil || store.isStartingLive)
+                                Spacer()
+                                Button {
+                                    Task {
+                                        if store.liveSession != nil || store.isStartingLive { await store.stopLive() }
+                                        else { await store.startLive(camera) }
+                                    }
+                                } label: {
+                                    Label(store.text(store.liveSession != nil || store.isStartingLive ? "Detener directo" : "Iniciar directo"), systemImage: "video")
+                                }
+                                .disabled(store.isBusy && !store.isStartingLive)
+                                .help(store.text("El directo utiliza sesiones breves. Puedes iniciarlo de nuevo cuando termine."))
+                            }
+                            .controlSize(.large)
 
-                    if let message = store.statusMessage {
-                        Text(store.text(message))
+                            if let feedback = store.cameraFeedback {
+                                Label(store.text(feedback.message),
+                                      systemImage: feedback.isError ? "exclamationmark.triangle" : "checkmark.circle")
+                                    .font(.caption)
+                                    .foregroundStyle(feedback.isError ? Color.orange : Color.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+
+                            HStack {
+                                Text(store.isDemo ? store.text("Las acciones de la demo son simuladas.") : store.text("Vídeo en directo con audio. Sin conversación bidireccional."))
+                                Spacer()
+                                if store.isBusy { ProgressView().controlSize(.small) }
+                            }
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(24)
                     }
-
-                    HStack {
-                        Text(store.isDemo ? store.text("Las acciones de la demo son simuladas.") : store.text("Vídeo en directo con audio. Sin conversación bidireccional."))
-                        Spacer()
-                        if store.isBusy { ProgressView().controlSize(.small) }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 }
-                .padding(24)
             } else {
                 ContentUnavailableView(store.text("Cámara no disponible"), systemImage: "video.slash")
                     .padding(40)
                 Button(store.text("Cerrar")) { dismiss() }.padding(.bottom, 20)
             }
         }
-        .frame(width: 660)
+        .frame(width: 660, height: sheetHeight)
     }
 
     private func detailMetric(_ title: String, value: String, symbol: String) -> some View {

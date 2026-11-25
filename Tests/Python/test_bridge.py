@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
+from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "Sources/Blinky/Bridge"))
 import bridge
@@ -72,16 +73,28 @@ class FakeBlink:
 
 
 def dependencies():
+    api = SimpleNamespace(
+        request_videos=AsyncMock(return_value={"media": []}),
+        request_local_storage_manifest=AsyncMock(return_value={"id": 501}),
+        get_local_storage_manifest=AsyncMock(return_value={"manifest_id": 123, "clips": []}),
+        request_local_storage_clip=AsyncMock(return_value={"id": 502}),
+        http_post=AsyncMock(return_value={"id": 600, "network_id": "7"}),
+        request_command_status=AsyncMock(return_value={"status_code": 908, "complete": True}),
+        modern_command_status=AsyncMock(return_value=None))
+    async def raw_get(blink, url, **kwargs):
+        parsed = urlparse(url)
+        if parsed.path.endswith("/media/changed"):
+            query = parse_qs(parsed.query)
+            since = dt.datetime.fromisoformat(query["since"][0].replace("Z", "+00:00")).timestamp()
+            return await api.request_videos(blink, time=since, page=int(query["page"][0]))
+        if "/commands/" in parsed.path:
+            return await api.modern_command_status(blink, url)
+        return None
+    api.http_get = AsyncMock(side_effect=raw_get)
     return SimpleNamespace(Blink=FakeBlink, Auth=FakeAuth, ClientSession=FakeSession,
                            ClientTimeout=lambda **kwargs: object(), TwoFARequired=TwoFARequired,
                            AuthenticationErrors=(UnauthorizedError, TokenRefreshFailed, LoginError),
-                           RecordingAPI=SimpleNamespace(
-                               request_videos=AsyncMock(return_value={"media": []}),
-                               request_local_storage_manifest=AsyncMock(return_value={"id": 501}),
-                               get_local_storage_manifest=AsyncMock(return_value={"manifest_id": 123, "clips": []}),
-                               request_local_storage_clip=AsyncMock(return_value={"id": 502}),
-                               http_post=AsyncMock(return_value={"id": 600, "network_id": "7"}),
-                               request_command_status=AsyncMock(return_value={"status_code": 908, "complete": True})))
+                           RecordingAPI=api)
 
 
 def camera_fixture(*, camera_id="11", name="Entrada", network_id="7"):
@@ -315,7 +328,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({clip["id"] for clip in result["clips"]}, {"cloud:10", "cloud:11"})
         self.assertTrue(all(clip["source"] == "cloud" for clip in result["clips"]))
         calls = self.bridge.recording_api.request_videos.await_args_list
-        self.assertEqual([call.kwargs["page"] for call in calls], [1, 2, 3])
+        self.assertEqual([call.kwargs["page"] for call in calls], [0, 1, 2])
         self.assertTrue(all(call.kwargs["time"] == 0 for call in calls))
         self.assertEqual(result["recordingsStatus"], "ready")
 
@@ -455,6 +468,63 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         result = await self.request("download_clip", clip_id=clip_id)
         self.assertEqual(result["error"]["code"], "media_too_large")
         self.bridge.recording_api.request_local_storage_clip.assert_not_awaited()
+
+    async def test_first_cloud_page_zero_is_not_skipped(self):
+        await self.login()
+        item = {"id": 42, "camera_id": 11, "network_id": 7, "device_name": "Entrada", "created_at": "2026-11-25T13:00:00Z", "media": "/clip/42.mp4"}
+        def first_page_only(blink, *, time, page):
+            return {"media": [item] if page == 0 else []}
+        self.bridge.recording_api.request_videos.side_effect = first_page_only
+        response = (await self.request("snapshot"))["result"]
+        self.assertEqual([clip["id"] for clip in response["clips"]], ["cloud:42"])
+        self.assertEqual(self.bridge.recording_api.request_videos.await_args_list[0].kwargs["page"], 0)
+
+    async def test_cloud_request_encodes_epoch_utc_and_keeps_blink_origin(self):
+        await self.login()
+        await self.request("snapshot")
+        url = self.bridge.recording_api.http_get.await_args_list[0].args[1]
+        parsed = urlparse(url)
+        self.assertEqual(parsed.scheme, "https")
+        self.assertEqual(parsed.netloc, "rest-prde.immedia-semi.com")
+        self.assertEqual(parsed.path, "/api/v1/accounts/42/media/changed")
+        self.assertEqual(parse_qs(parsed.query), {"since": ["1970-01-01T00:00:00Z"], "page": ["0"]})
+        self.assertIn("00%3A00%3A00Z", parsed.query)
+        self.assertNotIn("+0000", parsed.query)
+
+    async def test_explicit_refresh_reloads_empty_catalogue_within_poll_window(self):
+        await self.login()
+        empty = (await self.request("snapshot"))["result"]
+        self.assertEqual(empty["clips"], [])
+        item = {"id": 42, "camera_id": 11, "device_name": "Entrada", "created_at": "2026-11-25T13:00:00Z", "media": "/clip/42.mp4"}
+        self.bridge.recording_api.request_videos.side_effect = [{"media": [item]}, {"media": []}]
+        cached = (await self.request("snapshot"))["result"]
+        self.assertEqual(cached["clips"], [])
+        refreshed = (await self.request("snapshot", refresh_recordings=True))["result"]
+        self.assertEqual([clip["id"] for clip in refreshed["clips"]], ["cloud:42"])
+        self.assertEqual(self.bridge.recording_api.request_videos.await_count, 3)
+
+    async def test_explicit_refresh_does_not_replace_known_clips_on_source_failure(self):
+        await self.login()
+        item = {"id": 42, "device_name": "Entrada", "created_at": "2026-11-25T13:00:00Z", "media": "/clip/42.mp4"}
+        self.bridge.recording_api.request_videos.side_effect = [{"media": [item]}, {"media": []}]
+        before = (await self.request("snapshot"))["result"]
+        self.bridge.recording_api.request_videos.side_effect = None
+        self.bridge.recording_api.request_videos.return_value = None
+        after = (await self.request("snapshot", refresh_recordings=True))["result"]
+        self.assertEqual(after["clips"], before["clips"])
+        self.assertTrue(after["recordingWarnings"])
+        self.assertEqual(after["recordingsStatus"], "partial")
+
+    async def test_explicit_refresh_has_short_independent_rate_limit(self):
+        await self.login()
+        await self.request("snapshot", refresh_recordings=True)
+        await self.request("snapshot", refresh_recordings=True)
+        self.assertEqual(self.bridge.recording_api.request_videos.await_count, 1)
+
+    async def test_explicit_recording_refresh_rejects_non_boolean_parameter(self):
+        await self.login()
+        response = await self.request("snapshot", refresh_recordings="true")
+        self.assertEqual(response["error"]["code"], "invalid_request")
 
     async def test_malformed_and_unauthenticated_requests_have_safe_errors(self):
         malformed = await self.bridge.handle_request({"id": "bad", "method": "login", "params": []})

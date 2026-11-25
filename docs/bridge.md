@@ -16,7 +16,7 @@ The channel contains sensitive data and must not be logged. The bridge discards 
 | `restore` | `session` | Restores a session using its refresh token, without a password. |
 | `session` | None | Current session, including tokens refreshed during an operation. |
 | `logout` | None | Discards the process session and closes local connections. |
-| `snapshot` | None | `systems`, `cameras`, `clips`, `refreshedAt`. |
+| `snapshot` | Optional `refresh_recordings` boolean | `systems`, `cameras`, `clips`, `refreshedAt`. An explicit refresh can check for newly published clips before the normal cache expires. |
 | `set_system_armed` | `system_id`, `armed` (boolean) | Requests arming or disarming the system. |
 | `set_motion_enabled` | `camera_id`, `enabled` (boolean) | Requests enabling or disabling motion detection. |
 | `refresh_thumbnail` | `camera_id` | Requests a new image from the camera. |
@@ -32,11 +32,12 @@ Camera IDs are opaque: `<network_id>:<camera_type>:<camera_id>`. The `armed` and
 
 ## Initial version limits
 
-- State and clip lists are cached for at least 60 seconds. An explicit change allows an additional refresh to check the result. New image or clip requests have a minimum interval of 60 seconds per camera. Detection does not provide real-time notifications.
-- Clips: up to eight cloud pages and four USB systems per refresh. USB manifests are bounded to 500 entries per source; the combined list is bounded to 500. The old 48-hour filter is removed. Catalog discovery has a 75-second budget. `recordingWarnings`, `recordingsStatus`, and `recordingsTruncated` distinguish an empty list from failed or partial discovery. Each clip includes a `source` of `cloud` or `local`.
+- State and clip lists normally use a 60-second cache. An explicit refresh can query recordings earlier, and a change can trigger a refresh to check the result. New image or clip requests have a minimum interval of 60 seconds per camera. Detection does not provide real-time notifications.
+- Clips: up to eight cloud pages and four USB systems per refresh. Cloud queries start at page zero and encode UTC timestamps. USB manifests are bounded to 500 entries per source; the combined list is bounded to 500. Catalog discovery has a 75-second budget, or 50 seconds for an explicit refresh. `recordingWarnings`, `recordingsStatus`, and `recordingsTruncated` distinguish an empty list from failed or partial discovery. Each clip includes a `source` of `cloud` or `local`.
 - Each download is limited to 20 MB, and HTTP responses are read in chunks. Continuous recording, two-way audio, and automatic downloads are not provided.
 - Actions use the verified Blink endpoints and poll command completion. System and motion changes additionally refresh and compare server state. Recording returns `completed: true` only when a new clip is discovered; an accepted command with no visible clip returns `completed: false` and a user-facing message. No action automatically arms unrelated cameras.
 - Live playback uses verified TLS for Blink IMMIS, bounded packet parsing and FFmpeg. Blink credentials stay in memory and do not appear in FFmpeg arguments. HLS is served on `127.0.0.1` under a random capability path, with no directory listing or persistent archive. Sessions expire within 90 seconds and close when idle. EOF, logout, stop, and termination clean up owned resources.
+- For public IP relays on port 443, the bridge requires the bundled Blink certificate and verifies its exact fingerprint before sending stream credentials. DNS relays use standard TLS hostname verification. See the [certificate provenance and licence](../Sources/Blinky/Bridge/Certificates/NOTICE.txt).
 - `logout` disconnects locally; it does not guarantee token revocation on Blink's servers. The app must also remove the session from Keychain.
 - The library uses private Blink interfaces, which may change. Automated tests use substitutes for the account and cameras; real compatibility requires testing with the user's account.
 
@@ -46,5 +47,6 @@ Camera IDs are opaque: `<network_id>:<camera_type>:<camera_id>`. The `armed` and
 - [Authentication and session attributes in this release](https://github.com/fronzbot/blinkpy/blob/v0.25.9/blinkpy/auth.py).
 - [Startup, verification, and clip metadata](https://github.com/fronzbot/blinkpy/blob/v0.25.9/blinkpy/blinkpy.py).
 - [Camera methods](https://github.com/fronzbot/blinkpy/blob/v0.25.9/blinkpy/camera.py).
+- [Cloud pagination and command status reference](https://github.com/madmachinations/blink/blob/main/custom_components/blink_live/blink_live_client/client.py).
 - [Blink live stream protocol implementation](https://github.com/fronzbot/blinkpy/blob/v0.25.9/blinkpy/livestream.py).
 - [Community live integration](https://github.com/Derinbay-Labs/ha-blink-live).

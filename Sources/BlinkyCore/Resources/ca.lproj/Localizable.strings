@@ -184,6 +184,16 @@
 "No se encuentra esa cámara en tu cuenta." = "No es troba aquesta càmera al teu compte.";
 "No se encuentra ese sistema Blink." = "No es troba aquest sistema Blink.";
 "No se ha podido abrir el vídeo de Blink. Comprueba la conexión y vuelve a intentarlo." = "No s’ha pogut obrir el vídeo de Blink. Comprova la connexió i torna-ho a provar.";
+"No se ha podido verificar el certificado del servidor de vídeo de Blink. Actualiza Blinky e inténtalo de nuevo." = "No s’ha pogut verificar el certificat del servidor de vídeo de Blink. Actualitza Blinky i torna-ho a provar.";
+"No se ha podido establecer una conexión segura con el servidor de vídeo de Blink." = "No s’ha pogut establir una connexió segura amb el servidor de vídeo de Blink.";
+"No se ha podido cargar la identidad segura del vídeo de Blink. Vuelve a instalar Blinky." = "No s’han pogut carregar les dades per verificar el servidor de vídeo de Blink. Torna a instal·lar Blinky.";
+"El servidor de vídeo de Blink no ha respondido a tiempo. Inténtalo de nuevo." = "El servidor de vídeo de Blink no ha respost a temps. Torna-ho a provar.";
+"No se ha podido conectar con el servidor de vídeo de Blink. Revisa la conexión e inténtalo de nuevo." = "No s’ha pogut connectar amb el servidor de vídeo de Blink. Comprova la connexió i torna-ho a provar.";
+"No se ha podido iniciar el conversor de vídeo. Comprueba que FFmpeg funciona en este Mac." = "No s’ha pogut iniciar el convertidor de vídeo. Comprova que FFmpeg funcioni en aquest Mac.";
+"No se ha podido iniciar el reproductor de vídeo local. Cierra Blinky y vuelve a abrirlo." = "No s’ha pogut iniciar la reproducció de vídeo local. Tanca Blinky i torna’l a obrir.";
+"Blink ha tardado demasiado en preparar el vídeo. Inténtalo de nuevo." = "Blink ha trigat massa a preparar el vídeo. Torna-ho a provar.";
+"Blink no ha podido preparar el vídeo de esta cámara. Inténtalo de nuevo." = "Blink no ha pogut preparar el vídeo d’aquesta càmera. Torna-ho a provar.";
+"La transmisión de vídeo de Blink se ha interrumpido. Inténtalo de nuevo." = "La transmissió de vídeo de Blink s’ha interromput. Torna-ho a provar.";
 "No se ha podido acceder al llavero de macOS (%@). Comprueba que esté desbloqueado." = "No s’ha pogut accedir al clauer de macOS (%@). Comprova que estigui desbloquejat.";
 "No se ha podido actualizar la lista de grabaciones en la nube de Blink." = "No s’ha pogut actualitzar la llista de gravacions al núvol de Blink.";
 "No se ha podido completar la conexión con Blink. Inténtalo más tarde o vuelve a conectar." = "No s’ha pogut completar la connexió amb Blink. Torna-ho a provar més tard o torna a connectar.";
@@ -209,6 +219,10 @@
 "Sin conectar" = "Sense connectar";
 "Sin conexión" = "Sense connexió";
 "Sin grabaciones" = "Sense gravacions";
+"Blink ha confirmado el comando, pero todavía no ha publicado el clip en la nube. Actualiza Grabaciones para comprobarlo." = "Blink ha confirmat l’ordre, però el clip encara no és al núvol. Actualitza Gravacions per tornar-ho a comprovar.";
+"Blink ha confirmado el comando, pero no se ha podido comprobar el guardado en la nube. Actualiza Grabaciones." = "Blink ha confirmat l’ordre, però no s’ha pogut verificar que el clip s’hagi desat al núvol. Actualitza Gravacions.";
+"La fecha de consulta de grabaciones no es válida." = "La data de consulta de gravacions no és vàlida.";
+"El formato de actualización de grabaciones no es válido." = "El format d’actualització de gravacions no és vàlid.";
 "Sin imagen" = "Sense imatge";
 "Sistema activado" = "Sistema activat";
 "Sistema activado." = "Sistema activat.";

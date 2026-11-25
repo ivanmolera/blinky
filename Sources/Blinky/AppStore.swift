@@ -9,11 +9,20 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+struct CameraFeedback {
+    let message: String
+    let isError: Bool
+}
+
 @MainActor
 final class AppStore: ObservableObject {
     @Published var snapshot = BlinkySnapshot()
     @Published var selectedSection: SidebarSection = .cameras
-    @Published var selectedCameraID: String?
+    @Published var selectedCameraID: String? {
+        didSet {
+            if oldValue != selectedCameraID { cameraFeedback = nil }
+        }
+    }
     @Published var username = ""
     @Published var password = ""
     @Published var verificationCode = ""
@@ -32,7 +41,7 @@ final class AppStore: ObservableObject {
     @Published var liveSession: LiveSession?
     @Published var liveCameraID: String?
     @Published var isStartingLive = false
-    @Published var liveErrorMessage: String?
+    @Published private(set) var cameraFeedback: CameraFeedback?
     @Published var ffmpegAvailable: Bool?
 
     private let vault = SessionVault()
@@ -81,6 +90,8 @@ final class AppStore: ObservableObject {
         password = ""
         verificationCode = ""
         snapshot = .demo()
+        selectedCameraID = nil
+        cameraFeedback = nil
         lastUpdated = snapshot.refreshedAt
         selectedSection = .cameras
         errorMessage = nil
@@ -127,6 +138,8 @@ final class AppStore: ObservableObject {
         client = nil
         clientPythonPath = nil
         snapshot = .init()
+        selectedCameraID = nil
+        cameraFeedback = nil
         exportedClipIDs.removeAll()
         lastUpdated = nil
         isDemo = false
@@ -146,38 +159,41 @@ final class AppStore: ObservableObject {
             return
         }
         guard isAuthenticated else { return }
-        await perform { try await self.loadSnapshot(using: self.connection()) }
+        await perform {
+            try await self.loadSnapshot(using: self.connection(), refreshRecordings: true)
+        }
     }
 
     func refreshThumbnail(_ camera: BlinkCamera) async {
-        if isDemo { statusMessage = "Demostración: la solicitud de imagen es simulada."; return }
+        if isDemo { reportCameraFeedback("Demostración: la solicitud de imagen es simulada."); return }
         await action("refresh_thumbnail", parameters: ["camera_id": .string(camera.id)], message: "Imagen solicitada. Blink puede tardar unos segundos en actualizarla.")
     }
 
     func setSystemArmed(_ system: BlinkSystem, armed: Bool) async {
         if isDemo {
             if let index = snapshot.systems.firstIndex(where: { $0.id == system.id }) { snapshot.systems[index].armed = armed }
-            statusMessage = "Demostración: cambio de sistema simulado."
+            reportCameraFeedback("Demostración: cambio de sistema simulado.")
             return
         }
         await action("set_system_armed", parameters: ["system_id": .string(system.id), "armed": .bool(armed)], message: armed ? "Sistema activado." : "Sistema desactivado.")
     }
 
     func setMotionEnabled(_ camera: BlinkCamera, enabled: Bool) async {
+        guard !isBusy else { return }
         if isDemo {
             if let index = snapshot.cameras.firstIndex(where: { $0.id == camera.id }) { snapshot.cameras[index].motionEnabled = enabled }
-            statusMessage = "Demostración: detección de movimiento simulada."
+            reportCameraFeedback("Demostración: detección de movimiento simulada.")
             return
         }
         await action("set_motion_enabled", parameters: ["camera_id": .string(camera.id), "enabled": .bool(enabled)], message: "Detección de movimiento actualizada.")
         if enabled, errorMessage == nil,
            snapshot.systems.first(where: { $0.id == camera.systemID })?.armed != true {
-            statusMessage = "Detección configurada. Activa también el sistema para recibir eventos."
+            reportCameraFeedback("Detección configurada. Activa también el sistema para recibir eventos.")
         }
     }
 
     func record(_ camera: BlinkCamera) async {
-        if isDemo { statusMessage = "Demostración: no se ha grabado ningún vídeo."; return }
+        if isDemo { reportCameraFeedback("Demostración: no se ha grabado ningún vídeo."); return }
         await action("record", parameters: ["camera_id": .string(camera.id)], message: "Grabación solicitada. Actualiza los clips cuando Blink termine de procesarla.")
     }
 
@@ -217,7 +233,7 @@ final class AppStore: ObservableObject {
 
     func startLive(_ camera: BlinkCamera) async {
         if isDemo {
-            liveErrorMessage = "La demostración no conecta con cámaras reales."
+            reportCameraFeedback("La demostración no conecta con cámaras reales.", isError: true)
             return
         }
         guard isAuthenticated, !isBusy, !isStartingLive else { return }
@@ -225,9 +241,9 @@ final class AppStore: ObservableObject {
         let generation = UUID()
         liveGeneration = generation
         liveCameraID = camera.id
-        liveErrorMessage = nil
+        cameraFeedback = nil
         isStartingLive = true
-        await perform {
+        await perform(reportToCamera: true) {
             let bridge = try await self.connection()
             let session: LiveSession = try await bridge.call("live_start", params: ["camera_id": .string(camera.id)])
             guard self.liveGeneration == generation else {
@@ -245,7 +261,6 @@ final class AppStore: ObservableObject {
         }
         if liveGeneration == generation {
             isStartingLive = false
-            if liveSession == nil { liveErrorMessage = errorMessage }
         }
     }
 
@@ -258,8 +273,9 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func livePlaybackFailed() async {
-        liveErrorMessage = "No se ha podido reproducir el vídeo en directo."
+    func livePlaybackFailed(sessionID: String) async {
+        guard liveSession?.sessionID == sessionID else { return }
+        reportCameraFeedback("No se ha podido reproducir el vídeo en directo.", isError: true)
         await stopLive()
     }
 
@@ -280,18 +296,20 @@ final class AppStore: ObservableObject {
                     try await Task.sleep(for: .seconds(2))
                     guard let self, self.liveGeneration == generation, self.liveSession != nil else { return }
                     let status: LiveStatus = try await bridge.call("live_status")
+                    guard self.liveGeneration == generation else { return }
                     if !status.active {
                         self.liveSession = nil
                         self.isStartingLive = false
-                        self.statusMessage = "La sesión en directo ha terminado."
                         if ["failed", "encoder_stopped"].contains(status.reason ?? "") {
-                            self.liveErrorMessage = "No se ha podido reproducir el vídeo en directo."
+                            self.reportCameraFeedback("No se ha podido reproducir el vídeo en directo.", isError: true)
+                        } else {
+                            self.reportCameraFeedback("La sesión en directo ha terminado.")
                         }
                         return
                     }
                 } catch {
                     guard !Task.isCancelled, let self, self.liveGeneration == generation else { return }
-                    self.liveErrorMessage = "No se ha podido reproducir el vídeo en directo."
+                    self.reportCameraFeedback("No se ha podido reproducir el vídeo en directo.", isError: true)
                     await self.stopLive()
                     return
                 }
@@ -301,15 +319,12 @@ final class AppStore: ObservableObject {
 
     private func action(_ method: String, parameters: [String: JSONValue], message: String) async {
         guard isAuthenticated else { return }
-        await perform {
+        await perform(reportToCamera: true) {
             let bridge = try await self.connection()
             let result: CameraActionResult = try await bridge.call(method, params: parameters)
             try await self.persistSession(using: bridge)
-            self.statusMessage = result.message ?? message
-            if result.recordingRequested == true && result.recordingAvailable == false {
-                self.errorMessage = result.message ?? "Blink no ha confirmado el resultado del comando."
-            }
             try await self.loadSnapshot(using: bridge)
+            self.reportCameraFeedback(result.message ?? message, isError: !result.completed)
         }
     }
 
@@ -329,8 +344,9 @@ final class AppStore: ObservableObject {
         }
     }
 
-    private func loadSnapshot(using bridge: BridgeClient) async throws {
-        var latest: BlinkySnapshot = try await bridge.call("snapshot")
+    private func loadSnapshot(using bridge: BridgeClient, refreshRecordings: Bool = false) async throws {
+        let params: [String: JSONValue] = refreshRecordings ? ["refresh_recordings": .bool(true)] : [:]
+        var latest: BlinkySnapshot = try await bridge.call("snapshot", params: params)
         for index in latest.clips.indices {
             latest.clips[index].downloaded = exportedClipIDs.contains(latest.clips[index].id)
         }
@@ -368,14 +384,24 @@ final class AppStore: ObservableObject {
         return next
     }
 
-    private func perform(_ operation: @MainActor () async throws -> Void) async {
+    private func reportCameraFeedback(_ message: String, isError: Bool = false) {
+        cameraFeedback = CameraFeedback(message: message, isError: isError)
+        errorMessage = isError ? message : nil
+        statusMessage = isError ? nil : message
+    }
+
+    private func perform(reportToCamera: Bool = false, _ operation: @MainActor () async throws -> Void) async {
         guard !isBusy else { return }
         isBusy = true
         errorMessage = nil
         defer { isBusy = false }
         do { try await operation() }
         catch {
-            errorMessage = error.localizedDescription
+            if reportToCamera {
+                reportCameraFeedback(error.localizedDescription, isError: true)
+            } else {
+                errorMessage = error.localizedDescription
+            }
             if let failure = error as? BridgeFailure,
                ["authentication_required", "session_expired", "not_authenticated", "auth_required", "verification_required", "invalid_session"].contains(failure.code) {
                 isAuthenticated = false

@@ -184,6 +184,16 @@
 "No se encuentra esa cámara en tu cuenta." = "That camera was not found in your account.";
 "No se encuentra ese sistema Blink." = "That Blink system was not found.";
 "No se ha podido abrir el vídeo de Blink. Comprueba la conexión y vuelve a intentarlo." = "Could not open Blink’s video. Check your connection and try again.";
+"No se ha podido verificar el certificado del servidor de vídeo de Blink. Actualiza Blinky e inténtalo de nuevo." = "The Blink video server certificate could not be verified. Update Blinky and try again.";
+"No se ha podido establecer una conexión segura con el servidor de vídeo de Blink." = "Could not establish a secure connection to Blink’s video server.";
+"No se ha podido cargar la identidad segura del vídeo de Blink. Vuelve a instalar Blinky." = "Could not load the credentials used to verify Blink’s video server. Reinstall Blinky.";
+"El servidor de vídeo de Blink no ha respondido a tiempo. Inténtalo de nuevo." = "Blink’s video server did not respond in time. Try again.";
+"No se ha podido conectar con el servidor de vídeo de Blink. Revisa la conexión e inténtalo de nuevo." = "Could not connect to Blink’s video server. Check your connection and try again.";
+"No se ha podido iniciar el conversor de vídeo. Comprueba que FFmpeg funciona en este Mac." = "Could not start the video converter. Check that FFmpeg works on this Mac.";
+"No se ha podido iniciar el reproductor de vídeo local. Cierra Blinky y vuelve a abrirlo." = "Could not start local video playback. Quit and reopen Blinky.";
+"Blink ha tardado demasiado en preparar el vídeo. Inténtalo de nuevo." = "Blink took too long to prepare the video. Try again.";
+"Blink no ha podido preparar el vídeo de esta cámara. Inténtalo de nuevo." = "Blink could not prepare video from this camera. Try again.";
+"La transmisión de vídeo de Blink se ha interrumpido. Inténtalo de nuevo." = "The Blink video stream was interrupted. Try again.";
 "No se ha podido acceder al llavero de macOS (%@). Comprueba que esté desbloqueado." = "Could not access the macOS Keychain (%@). Make sure it is unlocked.";
 "No se ha podido actualizar la lista de grabaciones en la nube de Blink." = "Could not refresh Blink’s cloud recording list.";
 "No se ha podido completar la conexión con Blink. Inténtalo más tarde o vuelve a conectar." = "Could not complete the connection to Blink. Try later or connect again.";
@@ -209,6 +219,10 @@
 "Sin conectar" = "Not connected";
 "Sin conexión" = "Offline";
 "Sin grabaciones" = "No recordings";
+"Blink ha confirmado el comando, pero todavía no ha publicado el clip en la nube. Actualiza Grabaciones para comprobarlo." = "Blink confirmed the command, but the clip is not in cloud storage yet. Refresh Recordings to check again.";
+"Blink ha confirmado el comando, pero no se ha podido comprobar el guardado en la nube. Actualiza Grabaciones." = "Blink confirmed the command, but cloud storage could not be verified. Refresh Recordings to check again.";
+"La fecha de consulta de grabaciones no es válida." = "The recording search date is invalid.";
+"El formato de actualización de grabaciones no es válido." = "The recording refresh request is invalid.";
 "Sin imagen" = "No image";
 "Sistema activado" = "System armed";
 "Sistema activado." = "System armed.";
