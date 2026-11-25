@@ -1,0 +1,2 @@
+# Verified upstream release, 2026-07-21. Python 3.10 or newer.
+blinkpy==0.25.9

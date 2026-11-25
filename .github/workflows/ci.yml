@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Pruebas Swift
+        run: swift test
+      - name: Compilación Swift
+        run: swift build -c release
+      - name: Pruebas del puente sin cuenta Blink
+        run: python3 -m unittest discover -s Tests/Python -p 'test_*.py'
