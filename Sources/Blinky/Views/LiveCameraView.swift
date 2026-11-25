@@ -15,7 +15,7 @@ struct LiveCameraView: View {
     var body: some View {
         ZStack {
             if let player, session != nil {
-                VideoPlayer(player: player)
+                LivePlayerView(player: player)
             } else {
                 CameraImage(camera: camera, isDemo: store.isDemo, language: store.language)
                 if store.isStartingLive, store.liveCameraID == camera.id {
@@ -62,9 +62,33 @@ struct LiveCameraView: View {
                 Task { @MainActor in await store.livePlaybackFailed(sessionID: sessionID) }
             }
         }
-        let next = AVPlayer(playerItem: item)
-        next.automaticallyWaitsToMinimizeStalling = false
-        player = next
-        next.play()
+        player = AVPlayer(playerItem: item)
+    }
+}
+
+// Use AppKit's player view directly because SwiftUI's VideoPlayer can abort when mounted on macOS.
+private struct LivePlayerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .inline
+        view.videoGravity = .resizeAspect
+        view.allowsVideoFrameAnalysis = false
+        attachPlayer(to: view)
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if view.player !== player { attachPlayer(to: view) }
+    }
+
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: ()) {
+        view.player = nil
+    }
+
+    private func attachPlayer(to view: AVPlayerView) {
+        view.player = player
+        player.play()
     }
 }
