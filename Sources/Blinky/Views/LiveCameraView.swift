@@ -31,15 +31,6 @@ struct LiveCameraView: View {
         }
         .aspectRatio(16 / 9, contentMode: .fit)
         .background(.black.opacity(0.03))
-        .overlay(alignment: .topLeading) {
-            if session != nil {
-                Label(store.text("Directo"), systemImage: "video.fill")
-                    .font(.caption.weight(.semibold))
-                    .padding(8)
-                    .background(.regularMaterial, in: Capsule())
-                    .padding(12)
-            }
-        }
         .onChange(of: session?.sessionID) { _, _ in updatePlayer() }
         .onAppear { updatePlayer() }
         .onDisappear {

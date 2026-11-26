@@ -166,7 +166,16 @@ struct CameraDetailView: View {
             if let camera {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(camera.name).font(.title2.weight(.bold))
+                        HStack(spacing: 10) {
+                            Text(camera.name).font(.title2.weight(.bold))
+                            if store.liveCameraID == camera.id, store.liveSession != nil {
+                                Label(store.text("Directo"), systemImage: "video.fill")
+                                    .font(.caption.weight(.semibold))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(.regularMaterial, in: Capsule())
+                            }
+                        }
                         Text(camera.model).font(.subheadline).foregroundStyle(.secondary)
                     }
                     Spacer()
