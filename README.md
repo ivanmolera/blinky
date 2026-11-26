@@ -29,19 +29,17 @@ Blinky opens with sample data so you can explore the interface without connectin
 
 ## Screenshots
 
-These screenshots show Blinky in demo mode with sample cameras and recordings.
-
 ### Cameras
 
-![Camera dashboard with the system arming switch and three sample cameras](docs/screenshots/cameras.jpg)
+![Camera dashboard with the system arming switch and camera snapshots](docs/screenshots/cameras.png)
 
 ### Recordings
 
-![Recordings list with camera search and download buttons for two sample clips](docs/screenshots/recordings.jpg)
+![Cloud recordings with camera search and clip download buttons](docs/screenshots/recordings.png)
 
 ### Camera controls
 
-<img src="docs/screenshots/camera-detail.jpg" alt="Camera details with motion detection, snapshot, clip recording, and live view controls" width="550">
+<img src="docs/screenshots/camera-detail.png" alt="Camera details with motion detection, snapshot, clip recording, and live view controls" width="550">
 
 ## Connect your cameras
 
