@@ -73,6 +73,7 @@ private struct LivePlayerView: NSViewRepresentable {
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
         view.controlsStyle = .inline
+        view.showsFullScreenToggleButton = true
         view.videoGravity = .resizeAspect
         view.allowsVideoFrameAnalysis = false
         attachPlayer(to: view)
