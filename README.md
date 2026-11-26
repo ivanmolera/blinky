@@ -27,6 +27,22 @@ From the project directory:
 
 Blinky opens with sample data so you can explore the interface without connecting cameras. Without `--demo`, it displays the sign-in screen or restores your saved session. You can also open `Package.swift` in Xcode and run the Blinky scheme.
 
+## Screenshots
+
+These screenshots show Blinky in demo mode with sample cameras and recordings.
+
+### Cameras
+
+![Camera dashboard with the system arming switch and three sample cameras](docs/screenshots/cameras.jpg)
+
+### Recordings
+
+![Recordings list with camera search and download buttons for two sample clips](docs/screenshots/recordings.jpg)
+
+### Camera controls
+
+<img src="docs/screenshots/camera-detail.jpg" alt="Camera details with motion detection, snapshot, clip recording, and live view controls" width="550">
+
 ## Connect your cameras
 
 First, prepare the local Python environment:
