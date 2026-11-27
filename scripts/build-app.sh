@@ -41,8 +41,8 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Blinky</string>
   <key>CFBundleIconFile</key><string>AppIcon.icns</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.3.0</string>
-  <key>CFBundleVersion</key><string>8</string>
+  <key>CFBundleShortVersionString</key><string>0.4.0</string>
+  <key>CFBundleVersion</key><string>9</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSAppTransportSecurity</key>
@@ -51,8 +51,28 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# The distributable app prepares its own environment with the recipient's Python.
-if [[ "${BLINKY_DISTRIBUTION:-0}" == 1 ]]; then
+SIGN_ARGS=(--force --sign "${BLINKY_SIGN_IDENTITY:--}")
+if [[ -n "${BLINKY_SIGN_IDENTITY:-}" ]]; then
+  SIGN_ARGS+=(--options runtime --timestamp)
+fi
+
+if [[ "${BLINKY_BUNDLE_RUNTIME:-0}" == 1 ]]; then
+  ARCH="$(lipo -archs "$CONTENTS/MacOS/Blinky")"
+  if [[ "$ARCH" != "$(uname -m)" ]]; then
+    echo "Build the bundled runtime on a Mac running the same architecture as Blinky." >&2
+    exit 1
+  fi
+  PYTHON="$CONTENTS/Resources/Python"
+  BLINKY_TARGET_ARCH="$ARCH" "$ROOT/scripts/package-python.sh" "$PYTHON"
+  "$PYTHON/bin/python3" -I -B "$ROOT/scripts/layout-python-runtime.py" "$CONTENTS"
+  FFMPEG="$CONTENTS/Resources/Licenses/FFmpeg"
+  "$ROOT/scripts/package-ffmpeg.sh" "$FFMPEG" "${BLINKY_FFMPEG_SOURCE_DIR:-}"
+  mv "$FFMPEG/ffmpeg" "$CONTENTS/Helpers/ffmpeg"
+  while IFS= read -r -d '' executable; do
+    codesign "${SIGN_ARGS[@]}" "$executable"
+  done < <(find "$CONTENTS/Helpers" "$CONTENTS/Frameworks" -type f -print0)
+  plutil -insert BlinkyBundlesRuntime -bool YES "$CONTENTS/Info.plist"
+elif [[ "${BLINKY_DISTRIBUTION:-0}" == 1 ]]; then
   plutil -insert BlinkyManagesPython -bool YES "$CONTENTS/Info.plist"
 elif [[ -x "$ROOT/.venv/bin/python3" ]]; then
   plutil -insert BlinkyPythonPath -string "$ROOT/.venv/bin/python3" \
@@ -60,11 +80,7 @@ elif [[ -x "$ROOT/.venv/bin/python3" ]]; then
 fi
 
 plutil -lint "$CONTENTS/Info.plist"
-if [[ -n "${BLINKY_SIGN_IDENTITY:-}" ]]; then
-  codesign --force --sign "$BLINKY_SIGN_IDENTITY" --options runtime --timestamp "$APP_PATH"
-else
-  codesign --force --sign - "$APP_PATH"
-fi
+codesign "${SIGN_ARGS[@]}" "$APP_PATH"
 
 echo "App creada: $APP_PATH"
 echo "Abre con: open \"$APP_PATH\""

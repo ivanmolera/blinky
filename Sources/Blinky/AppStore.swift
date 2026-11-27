@@ -45,6 +45,8 @@ final class AppStore: ObservableObject {
     @Published private(set) var cameraFeedback: CameraFeedback?
     @Published var ffmpegAvailable: Bool?
     let managesPython: Bool
+    private let bundledRuntime: BundledBridgeRuntime?
+    var bundlesRuntime: Bool { bundledRuntime != nil }
 
     private let vault = SessionVault()
     private var client: BridgeClient?
@@ -56,11 +58,17 @@ final class AppStore: ObservableObject {
 
     init() {
         let managed = Bundle.main.object(forInfoDictionaryKey: "BlinkyManagesPython") as? Bool == true
-        managesPython = managed
+        let bundled = Bundle.main.object(forInfoDictionaryKey: "BlinkyBundlesRuntime") as? Bool == true
+        bundledRuntime = bundled ? BundledBridgeRuntime(contentsURL: Bundle.main.bundleURL.appendingPathComponent("Contents")) : nil
+        managesPython = managed && !bundled
         language = UserDefaults.standard.string(forKey: "appLanguage").flatMap(AppLanguage.init(rawValue:)) ?? .preferred()
-        pythonPath = ProcessInfo.processInfo.environment["BLINKY_PYTHON"]
-            ?? UserDefaults.standard.string(forKey: managed ? "managedPythonPath" : "pythonPath")
-            ?? (managed ? "" : (Bundle.main.object(forInfoDictionaryKey: "BlinkyPythonPath") as? String ?? Self.discoverPython()))
+        if bundled {
+            pythonPath = ""
+        } else {
+            pythonPath = ProcessInfo.processInfo.environment["BLINKY_PYTHON"]
+                ?? UserDefaults.standard.string(forKey: managed ? "managedPythonPath" : "pythonPath")
+                ?? (managed ? "" : (Bundle.main.object(forInfoDictionaryKey: "BlinkyPythonPath") as? String ?? Self.discoverPython()))
+        }
     }
 
     func text(_ key: String) -> String { AppStrings.text(key, language: language) }
@@ -228,6 +236,9 @@ final class AppStore: ObservableObject {
             let bridge = try await self.connection()
             let health: BridgeHealth = try await bridge.call("health")
             self.ffmpegAvailable = health.ffmpegAvailable
+            if bundlesRuntime && (!health.blinkpyAvailable || health.ffmpegAvailable != true) {
+                throw RuntimeConfigurationError.bundledRuntimeUnavailable
+            }
             self.healthDescription = health.blinkpyAvailable
                 ? "Python \(health.pythonVersion) · blinkpy \(health.blinkpyVersion ?? "disponible")"
                 : (managesPython ? ManagedPython.SetupError.preparationFailed.localizedDescription
@@ -365,19 +376,23 @@ final class AppStore: ObservableObject {
     }
 
     private func connection() async throws -> BridgeClient {
-        let path = NSString(string: pythonPath.trimmingCharacters(in: .whitespacesAndNewlines)).expandingTildeInPath
+        let path = bundledRuntime?.pythonURL.path
+            ?? NSString(string: pythonPath.trimmingCharacters(in: .whitespacesAndNewlines)).expandingTildeInPath
         guard managesPython || !path.isEmpty else { throw BridgeClientError.runtimeUnavailable }
+        if let bundledRuntime, !bundledRuntime.isAvailable {
+            throw RuntimeConfigurationError.bundledRuntimeUnavailable
+        }
         if let client, clientPythonPath == path { return client }
         if let client {
             guard !isAuthenticated && !requiresTwoFactor else {
-                throw RuntimeConfigurationError()
+                throw RuntimeConfigurationError.sessionActive
             }
             await client.stop()
         }
         let bundledScript = Bundle.module.url(forResource: "bridge", withExtension: "py", subdirectory: "Bridge")
             ?? Bundle.module.bundleURL.appendingPathComponent("Bridge/bridge.py")
-        let scriptURL = ProcessInfo.processInfo.environment["BLINKY_BRIDGE_PATH"].map { URL(fileURLWithPath: $0) }
-            ?? bundledScript
+        let scriptOverride = bundlesRuntime ? nil : ProcessInfo.processInfo.environment["BLINKY_BRIDGE_PATH"]
+        let scriptURL = scriptOverride.map { URL(fileURLWithPath: $0) } ?? bundledScript
         let runtime: ManagedPython?
         if managesPython {
             isPreparingPython = true
@@ -387,10 +402,13 @@ final class AppStore: ObservableObject {
             runtime = nil
         }
         let next = BridgeClient(pythonURL: URL(fileURLWithPath: runtime?.pythonPath ?? path),
-                                scriptURL: scriptURL, certificatesPath: runtime?.certificatesPath)
+                                scriptURL: scriptURL, certificatesPath: runtime?.certificatesPath,
+                                bundledRuntime: bundledRuntime)
         client = next
         clientPythonPath = path
-        UserDefaults.standard.set(path, forKey: managesPython ? "managedPythonPath" : "pythonPath")
+        if !bundlesRuntime {
+            UserDefaults.standard.set(path, forKey: managesPython ? "managedPythonPath" : "pythonPath")
+        }
         return next
     }
 
@@ -434,8 +452,16 @@ final class AppStore: ObservableObject {
             .first { FileManager.default.isExecutableFile(atPath: $0) } ?? ""
     }
 
-    private struct RuntimeConfigurationError: LocalizedError {
-        var errorDescription: String? { "Cierra la sesión antes de cambiar el intérprete de Python." }
+    private enum RuntimeConfigurationError: LocalizedError {
+        case sessionActive
+        case bundledRuntimeUnavailable
+
+        var errorDescription: String? {
+            switch self {
+            case .sessionActive: return "Cierra la sesión antes de cambiar el intérprete de Python."
+            case .bundledRuntimeUnavailable: return "Faltan componentes de Blinky o no se pueden cargar. Vuelve a instalar la aplicación."
+            }
+        }
     }
 
     private enum PlaybackError: LocalizedError {

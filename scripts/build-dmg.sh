@@ -17,7 +17,8 @@ fi
 STAGING="$(mktemp -d "${TMPDIR:-/tmp}/blinky-dmg.XXXXXX")"
 trap 'rm -rf "$STAGING"' EXIT
 
-BLINKY_DISTRIBUTION=1 BLINKY_APP_OUTPUT_DIR="$STAGING/image" "$ROOT/scripts/build-app.sh"
+BLINKY_BUNDLE_RUNTIME=1 BLINKY_APP_OUTPUT_DIR="$STAGING/image" \
+  BLINKY_FFMPEG_SOURCE_DIR="$STAGING/sources" "$ROOT/scripts/build-app.sh"
 APP="$STAGING/image/Blinky.app"
 codesign --verify --deep --strict "$APP"
 VERSION="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")"
@@ -34,11 +35,10 @@ Drag Blinky to Applications, then open it from Applications.
 Requirements
 
 - macOS 14 or later.
-- Python 3.10 or later to connect a Blink account.
-  https://www.python.org/downloads/macos/
-- Internet access. Blinky downloads its Python dependencies the first time
-  you connect your account.
-- FFmpeg for Live View.
+- Internet access to connect to Blink.
+
+Python, blinkpy, and FFmpeg are included in Blinky.
+The FFmpeg source and build instructions are supplied alongside the disk image.
 INSTALLATION
 hdiutil create -volname Blinky -srcfolder "$STAGING/image" -format UDZO "$IMAGE"
 hdiutil verify "$IMAGE"
@@ -54,5 +54,6 @@ else
 fi
 
 mkdir -p "$ROOT/dist"
+mv "$STAGING/sources/"* "$ROOT/dist/"
 mv "$IMAGE" "$ROOT/dist/$FILENAME"
 echo "Disk image ready at $ROOT/dist/$FILENAME"

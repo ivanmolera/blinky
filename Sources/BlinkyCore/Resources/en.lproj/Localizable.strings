@@ -260,3 +260,5 @@
 "Blinky instala automáticamente las bibliotecas que necesita en un entorno de Python propio." = "Blinky automatically installs the required libraries in its own Python environment.";
 "Detectar Python automáticamente" = "Detect Python automatically";
 "Deja el campo vacío para buscar Python instalado en este Mac. Desconecta la cuenta antes de cambiar el intérprete." = "Leave the field blank to find Python installed on this Mac. Disconnect your account before changing the interpreter.";
+"Blinky incluye Python y FFmpeg." = "Blinky includes Python and FFmpeg.";
+"Faltan componentes de Blinky o no se pueden cargar. Vuelve a instalar la aplicación." = "Some Blinky components are missing or could not be loaded. Reinstall the app.";

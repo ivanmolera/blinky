@@ -87,4 +87,36 @@ final class BlinkyCoreTests: XCTestCase {
         }
         await bridge.stop()
     }
+
+    func testBundledBridgeUsesTheEmbeddedRuntime() async throws {
+        let files = FileManager.default
+        let contents = files.temporaryDirectory.appendingPathComponent("Blinky Test \(UUID())/Contents")
+        let runtime = BundledBridgeRuntime(contentsURL: contents)
+        defer { try? files.removeItem(at: contents.deletingLastPathComponent()) }
+        try files.createDirectory(at: runtime.pythonURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try files.createDirectory(at: runtime.pythonHome, withIntermediateDirectories: true)
+        let mockLauncher = """
+        #!/bin/sh
+        export BLINKY_TEST_LAUNCHER="$0" BLINKY_TEST_PYTHON_HOME="$PYTHONHOME"
+        exec /usr/bin/env -u PYTHONHOME /usr/bin/python3 "$@"
+        """
+        try mockLauncher.write(to: runtime.pythonURL, atomically: true, encoding: .utf8)
+        try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: runtime.pythonURL.path)
+        let probe = """
+        import json, os, sys
+        request = json.loads(sys.stdin.readline())
+        keys = ['BLINKY_TEST_LAUNCHER', 'BLINKY_TEST_PYTHON_HOME', 'BLINKY_FFMPEG', 'SSL_CERT_FILE']
+        print(json.dumps({'id': request['id'], 'result': {key: os.environ[key] for key in keys}}), flush=True)
+        """
+        let script = contents.appendingPathComponent("probe.py")
+        try probe.write(to: script, atomically: true, encoding: .utf8)
+        let bridge = BridgeClient(pythonURL: URL(fileURLWithPath: "/nonexistent/python3"),
+                                  scriptURL: script, bundledRuntime: runtime, timeout: 5)
+        let result: [String: String] = try await bridge.call("probe")
+        XCTAssertEqual(result["BLINKY_TEST_LAUNCHER"], runtime.pythonURL.path)
+        XCTAssertEqual(result["BLINKY_TEST_PYTHON_HOME"], runtime.pythonHome.path)
+        XCTAssertEqual(result["BLINKY_FFMPEG"], runtime.ffmpegURL.path)
+        XCTAssertEqual(result["SSL_CERT_FILE"], runtime.certificatesURL.path)
+        await bridge.stop()
+    }
 }

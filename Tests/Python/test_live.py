@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import importlib.util
+import os
 from pathlib import Path
 import shutil
 import ssl
@@ -514,9 +515,15 @@ class LocalHLSTests(unittest.IsolatedAsyncioTestCase):
     async def check_hls(self, *, legacy):
         from aiohttp import ClientSession
         executable = live.find_ffmpeg()
+        generator = os.environ.get("BLINKY_TEST_MEDIA_ENCODER") or executable
+        inputs = ["-f", "lavfi", "-i", "testsrc=size=160x120:rate=10"]
+        audio = []
+        if legacy:
+            inputs += ["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000"]
+            audio = ["-c:a", "aac"]
         generated = (await asyncio.to_thread(subprocess.run, [
-            executable, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
-            "testsrc=size=160x120:rate=10", "-t", "6", "-c:v", "libx264", "-preset", "ultrafast",
+            generator, "-hide_banner", "-loglevel", "error", *inputs,
+            "-t", "6", "-c:v", "libx264", "-preset", "ultrafast", *audio,
             "-pix_fmt", "yuv420p", "-g", "10", "-f", "mpegts", "pipe:1",
         ], capture_output=True, timeout=15, check=True)).stdout
         manager = FixtureManager(startup_timeout=5)

@@ -112,7 +112,7 @@ struct OnboardingView: View {
                         }
                     }
                     .font(.caption)
-                } else {
+                } else if !store.bundlesRuntime {
                     Text(store.text("Primera conexión: configura el entorno de Blink en Ajustes."))
                         .font(.caption)
                         .foregroundStyle(.secondary)

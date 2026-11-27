@@ -1,6 +1,26 @@
 import Foundation
 import Darwin
 
+public struct BundledBridgeRuntime: Sendable {
+    public let contentsURL: URL
+
+    public init(contentsURL: URL) {
+        self.contentsURL = contentsURL
+    }
+
+    public var pythonURL: URL { contentsURL.appendingPathComponent("Helpers/python3") }
+    var pythonHome: URL { contentsURL.appendingPathComponent("Resources/Python", isDirectory: true) }
+    var ffmpegURL: URL { contentsURL.appendingPathComponent("Helpers/ffmpeg") }
+    var certificatesURL: URL { pythonHome.appendingPathComponent("cacert.pem") }
+
+    public var isAvailable: Bool {
+        let files = FileManager.default
+        return files.isExecutableFile(atPath: pythonURL.path)
+            && files.isExecutableFile(atPath: ffmpegURL.path)
+            && files.isReadableFile(atPath: certificatesURL.path)
+    }
+}
+
 /// Requests run serially on a dedicated queue. Credentials travel through stdin only.
 /// This process does not open a network listener or write session files.
 public final class BridgeClient: @unchecked Sendable {
@@ -8,6 +28,7 @@ public final class BridgeClient: @unchecked Sendable {
     private let pythonURL: URL
     private let scriptURL: URL
     private let certificatesPath: String?
+    private let bundledRuntime: BundledBridgeRuntime?
     private let timeout: TimeInterval
     private var process: Process?
     private var input: FileHandle?
@@ -15,10 +36,12 @@ public final class BridgeClient: @unchecked Sendable {
     private var buffer = Data()
     private let maximumResponseBytes = 128 * 1024 * 1024
 
-    public init(pythonURL: URL, scriptURL: URL, certificatesPath: String? = nil, timeout: TimeInterval = 120) {
-        self.pythonURL = pythonURL
+    public init(pythonURL: URL, scriptURL: URL, certificatesPath: String? = nil,
+                bundledRuntime: BundledBridgeRuntime? = nil, timeout: TimeInterval = 120) {
+        self.pythonURL = bundledRuntime?.pythonURL ?? pythonURL
         self.scriptURL = scriptURL
         self.certificatesPath = certificatesPath
+        self.bundledRuntime = bundledRuntime
         self.timeout = timeout
     }
 
@@ -65,6 +88,16 @@ public final class BridgeClient: @unchecked Sendable {
         environment.removeValue(forKey: "PYTHONPATH")
         if let certificatesPath, environment["SSL_CERT_FILE"] == nil {
             environment["SSL_CERT_FILE"] = certificatesPath
+        }
+        if let bundledRuntime {
+            // Finder and developer shells can provide environment variables for an unrelated Python.
+            environment = environment.filter {
+                !$0.key.hasPrefix("PYTHON") && !$0.key.hasPrefix("DYLD_") && $0.key != "__PYVENV_LAUNCHER__"
+            }
+            environment["PYTHONHOME"] = bundledRuntime.pythonHome.path
+            environment["SSL_CERT_FILE"] = bundledRuntime.certificatesURL.path
+            environment["BLINKY_FFMPEG"] = bundledRuntime.ffmpegURL.path
+            task.arguments = ["-s", "-B", "-u", scriptURL.path]
         }
         task.environment = environment
         task.standardInput = stdin
