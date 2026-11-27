@@ -251,3 +251,12 @@
 "disponible" = "disponible";
 "¿Quieres echar un vistazo?" = "¿Quieres echar un vistazo?";
 "Última captura de %@" = "Última captura de %@";
+
+"Preparando el entorno de Python…" = "Preparando el entorno de Python…";
+"Instala Python 3.10 o posterior desde python.org o selecciona tu intérprete en Ajustes." = "Instala Python 3.10 o posterior desde python.org o selecciona tu intérprete en Ajustes.";
+"No se ha podido preparar el entorno de Python. Comprueba tu conexión a internet y vuelve a intentarlo." = "No se ha podido preparar el entorno de Python. Comprueba tu conexión a internet y vuelve a intentarlo.";
+"Para conectar con Blink necesitas Python 3.10 o posterior. Blinky prepara el entorno en la primera conexión." = "Para conectar con Blink necesitas Python 3.10 o posterior. Blinky prepara el entorno en la primera conexión.";
+"Descargar Python" = "Descargar Python";
+"Blinky instala automáticamente las bibliotecas que necesita en un entorno de Python propio." = "Blinky instala automáticamente las bibliotecas que necesita en un entorno de Python propio.";
+"Detectar Python automáticamente" = "Detectar Python automáticamente";
+"Deja el campo vacío para buscar Python instalado en este Mac. Desconecta la cuenta antes de cambiar el intérprete." = "Deja el campo vacío para buscar Python instalado en este Mac. Desconecta la cuenta antes de cambiar el intérprete.";

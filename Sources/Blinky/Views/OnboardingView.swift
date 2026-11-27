@@ -102,9 +102,21 @@ struct OnboardingView: View {
                     }
                     .font(.subheadline)
                 }
-                Text(store.text("Primera conexión: configura el entorno de Blink en Ajustes."))
+                if store.managesPython {
+                    VStack(spacing: 6) {
+                        Text(store.text("Para conectar con Blink necesitas Python 3.10 o posterior. Blinky prepara el entorno en la primera conexión."))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        if let downloadURL = URL(string: "https://www.python.org/downloads/macos/") {
+                            Link(store.text("Descargar Python"), destination: downloadURL)
+                        }
+                    }
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                } else {
+                    Text(store.text("Primera conexión: configura el entorno de Blink en Ajustes."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 42)

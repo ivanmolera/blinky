@@ -27,6 +27,7 @@ final class AppStore: ObservableObject {
     @Published var password = ""
     @Published var verificationCode = ""
     @Published var pythonPath: String
+    @Published private(set) var isPreparingPython = false
     @Published var isBusy = false
     @Published var isDemo = false
     @Published var isAuthenticated = false
@@ -43,6 +44,7 @@ final class AppStore: ObservableObject {
     @Published var isStartingLive = false
     @Published private(set) var cameraFeedback: CameraFeedback?
     @Published var ffmpegAvailable: Bool?
+    let managesPython: Bool
 
     private let vault = SessionVault()
     private var client: BridgeClient?
@@ -53,11 +55,12 @@ final class AppStore: ObservableObject {
     private var liveMonitor: Task<Void, Never>?
 
     init() {
+        let managed = Bundle.main.object(forInfoDictionaryKey: "BlinkyManagesPython") as? Bool == true
+        managesPython = managed
         language = UserDefaults.standard.string(forKey: "appLanguage").flatMap(AppLanguage.init(rawValue:)) ?? .preferred()
         pythonPath = ProcessInfo.processInfo.environment["BLINKY_PYTHON"]
-            ?? UserDefaults.standard.string(forKey: "pythonPath")
-            ?? Bundle.main.object(forInfoDictionaryKey: "BlinkyPythonPath") as? String
-            ?? Self.discoverPython()
+            ?? UserDefaults.standard.string(forKey: managed ? "managedPythonPath" : "pythonPath")
+            ?? (managed ? "" : (Bundle.main.object(forInfoDictionaryKey: "BlinkyPythonPath") as? String ?? Self.discoverPython()))
     }
 
     func text(_ key: String) -> String { AppStrings.text(key, language: language) }
@@ -227,7 +230,8 @@ final class AppStore: ObservableObject {
             self.ffmpegAvailable = health.ffmpegAvailable
             self.healthDescription = health.blinkpyAvailable
                 ? "Python \(health.pythonVersion) · blinkpy \(health.blinkpyVersion ?? "disponible")"
-                : "Python disponible; falta blinkpy. Ejecuta scripts/bootstrap.sh."
+                : (managesPython ? ManagedPython.SetupError.preparationFailed.localizedDescription
+                   : "Python disponible; falta blinkpy. Ejecuta scripts/bootstrap.sh.")
         }
     }
 
@@ -362,7 +366,7 @@ final class AppStore: ObservableObject {
 
     private func connection() async throws -> BridgeClient {
         let path = NSString(string: pythonPath.trimmingCharacters(in: .whitespacesAndNewlines)).expandingTildeInPath
-        guard !path.isEmpty else { throw BridgeClientError.runtimeUnavailable }
+        guard managesPython || !path.isEmpty else { throw BridgeClientError.runtimeUnavailable }
         if let client, clientPythonPath == path { return client }
         if let client {
             guard !isAuthenticated && !requiresTwoFactor else {
@@ -370,17 +374,23 @@ final class AppStore: ObservableObject {
             }
             await client.stop()
         }
-        let scriptURL: URL
-        if let override = ProcessInfo.processInfo.environment["BLINKY_BRIDGE_PATH"] {
-            scriptURL = URL(fileURLWithPath: override)
+        let bundledScript = Bundle.module.url(forResource: "bridge", withExtension: "py", subdirectory: "Bridge")
+            ?? Bundle.module.bundleURL.appendingPathComponent("Bridge/bridge.py")
+        let scriptURL = ProcessInfo.processInfo.environment["BLINKY_BRIDGE_PATH"].map { URL(fileURLWithPath: $0) }
+            ?? bundledScript
+        let runtime: ManagedPython?
+        if managesPython {
+            isPreparingPython = true
+            defer { isPreparingPython = false }
+            runtime = try await ManagedPython.prepare(using: path, in: bundledScript.deletingLastPathComponent())
         } else {
-            scriptURL = Bundle.module.url(forResource: "bridge", withExtension: "py", subdirectory: "Bridge")
-                ?? Bundle.module.bundleURL.appendingPathComponent("Bridge/bridge.py")
+            runtime = nil
         }
-        let next = BridgeClient(pythonURL: URL(fileURLWithPath: path), scriptURL: scriptURL)
+        let next = BridgeClient(pythonURL: URL(fileURLWithPath: runtime?.pythonPath ?? path),
+                                scriptURL: scriptURL, certificatesPath: runtime?.certificatesPath)
         client = next
         clientPythonPath = path
-        UserDefaults.standard.set(path, forKey: "pythonPath")
+        UserDefaults.standard.set(path, forKey: managesPython ? "managedPythonPath" : "pythonPath")
         return next
     }
 

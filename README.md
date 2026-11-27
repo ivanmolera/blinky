@@ -2,7 +2,18 @@
 
 A native macOS app for accessing your Blink cameras from your Mac. The interface uses SwiftUI and connects to Blink through a small Python process using [blinkpy](https://github.com/fronzbot/blinkpy). This is an independent project, with no affiliation with Blink or Amazon.
 
+## Install from a disk image
+
+Open the DMG in Finder, drag Blinky to **Applications**, then open the app. Use the disk image for your Mac’s architecture. It requires macOS 14 or later.
+
+- Install [Python 3.10 or later](https://www.python.org/downloads/macos/) to connect a Blink account. Blinky detects it and downloads the required libraries into a private per-user environment on the first connection. This step needs internet access.
+- Install FFmpeg if you want to use **Live View**. Blinky detects standard Homebrew installations.
+
+See [how to build and notarize a DMG](docs/distribution.md) for distribution.
+
 ## Quick start
+
+To build Blinky from source, you need the following tools.
 
 - macOS 14 or later.
 - Xcode 15.3 or later, with Swift 5.10 or later.
@@ -58,7 +69,7 @@ Connect your Blink account in the app and complete any verification requested by
 
 The build script creates a release build at `dist/Blinky.app` with its icon and a local ad hoc signature. It does not install the app in `/Applications` or use developer certificates. Quit a running copy before opening the rebuilt application.
 
-If you have run `bootstrap.sh`, the generated app stores the path to the `.venv` interpreter in `Info.plist`. Keep the project directory at that location. If you move it, prepare the environment and build the app again. This package is intended for local use: it does not yet bundle a Python interpreter for distribution and is not notarized.
+If you have run `bootstrap.sh`, the development build stores the path to the `.venv` interpreter in `Info.plist`. Keep the project directory at that location. If you move it, prepare the environment and build the app again.
 
 To use a different interpreter when running from Terminal:
 

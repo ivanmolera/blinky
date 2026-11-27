@@ -7,6 +7,7 @@ public final class BridgeClient: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.ivanmolera.blinky.bridge", qos: .userInitiated)
     private let pythonURL: URL
     private let scriptURL: URL
+    private let certificatesPath: String?
     private let timeout: TimeInterval
     private var process: Process?
     private var input: FileHandle?
@@ -14,9 +15,10 @@ public final class BridgeClient: @unchecked Sendable {
     private var buffer = Data()
     private let maximumResponseBytes = 128 * 1024 * 1024
 
-    public init(pythonURL: URL, scriptURL: URL, timeout: TimeInterval = 120) {
+    public init(pythonURL: URL, scriptURL: URL, certificatesPath: String? = nil, timeout: TimeInterval = 120) {
         self.pythonURL = pythonURL
         self.scriptURL = scriptURL
+        self.certificatesPath = certificatesPath
         self.timeout = timeout
     }
 
@@ -61,6 +63,9 @@ public final class BridgeClient: @unchecked Sendable {
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         environment.removeValue(forKey: "PYTHONHOME")
         environment.removeValue(forKey: "PYTHONPATH")
+        if let certificatesPath, environment["SSL_CERT_FILE"] == nil {
+            environment["SSL_CERT_FILE"] = certificatesPath
+        }
         task.environment = environment
         task.standardInput = stdin
         task.standardOutput = stdout

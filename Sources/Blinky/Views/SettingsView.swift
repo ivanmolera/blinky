@@ -64,17 +64,21 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         Label(store.text("Entorno de conexión"), systemImage: "externaldrive.connected.to.line.below")
                             .font(.headline)
-                        Text(store.text("Esta primera versión utiliza un entorno local de Python con blinkpy para comunicarse con Blink."))
+                        Text(store.text(store.managesPython
+                            ? "Blinky instala automáticamente las bibliotecas que necesita en un entorno de Python propio."
+                            : "Esta primera versión utiliza un entorno local de Python con blinkpy para comunicarse con Blink."))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 7) {
                             Text(store.text("Ejecutable de Python"))
                                 .font(.subheadline.weight(.medium))
-                            TextField(store.text("Ruta al entorno Python de Blinky"), text: $store.pythonPath)
+                            TextField(store.text(store.managesPython ? "Detectar Python automáticamente" : "Ruta al entorno Python de Blinky"), text: $store.pythonPath)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(.body, design: .monospaced))
                                 .disabled(store.isAuthenticated || store.requiresTwoFactor || store.isBusy)
-                            Text(store.text("Ejemplo: /ruta/a/blinky/.venv/bin/python3. Desconecta la cuenta antes de cambiar el entorno."))
+                            Text(store.text(store.managesPython
+                                ? "Deja el campo vacío para buscar Python instalado en este Mac. Desconecta la cuenta antes de cambiar el intérprete."
+                                : "Ejemplo: /ruta/a/blinky/.venv/bin/python3. Desconecta la cuenta antes de cambiar el entorno."))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
@@ -84,7 +88,7 @@ struct SettingsView: View {
                                 Task { await store.checkRuntime() }
                             }
                             .disabled(store.isBusy)
-                            Text(store.text(store.healthDescription))
+                            Text(store.text(store.isPreparingPython ? "Preparando el entorno de Python…" : store.healthDescription))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)

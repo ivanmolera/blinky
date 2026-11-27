@@ -10,7 +10,8 @@ fi
 
 swift build -c release
 BIN_DIR="$(swift build -c release --show-bin-path)"
-APP_PATH="$ROOT/dist/Blinky.app"
+OUTPUT_DIR="${BLINKY_APP_OUTPUT_DIR:-$ROOT/dist}"
+APP_PATH="$OUTPUT_DIR/Blinky.app"
 CONTENTS="$APP_PATH/Contents"
 
 if [[ ! -d "$BIN_DIR/Blinky_Blinky.bundle" ]]; then
@@ -18,7 +19,7 @@ if [[ ! -d "$BIN_DIR/Blinky_Blinky.bundle" ]]; then
   exit 1
 fi
 
-mkdir -p "$ROOT/dist"
+mkdir -p "$OUTPUT_DIR"
 rm -rf "$APP_PATH"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$BIN_DIR/Blinky" "$CONTENTS/MacOS/Blinky"
@@ -40,8 +41,8 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Blinky</string>
   <key>CFBundleIconFile</key><string>AppIcon.icns</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.2.5</string>
-  <key>CFBundleVersion</key><string>7</string>
+  <key>CFBundleShortVersionString</key><string>0.3.0</string>
+  <key>CFBundleVersion</key><string>8</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSAppTransportSecurity</key>
@@ -50,14 +51,18 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# The development app reuses the local environment; it does not bundle Python.
-if [[ -x "$ROOT/.venv/bin/python3" ]]; then
+# The distributable app prepares its own environment with the recipient's Python.
+if [[ "${BLINKY_DISTRIBUTION:-0}" == 1 ]]; then
+  plutil -insert BlinkyManagesPython -bool YES "$CONTENTS/Info.plist"
+elif [[ -x "$ROOT/.venv/bin/python3" ]]; then
   plutil -insert BlinkyPythonPath -string "$ROOT/.venv/bin/python3" \
     "$CONTENTS/Info.plist"
 fi
 
 plutil -lint "$CONTENTS/Info.plist"
-if command -v codesign >/dev/null 2>&1; then
+if [[ -n "${BLINKY_SIGN_IDENTITY:-}" ]]; then
+  codesign --force --sign "$BLINKY_SIGN_IDENTITY" --options runtime --timestamp "$APP_PATH"
+else
   codesign --force --sign - "$APP_PATH"
 fi
 

@@ -252,7 +252,7 @@ struct ContentView: View {
         HStack(spacing: 8) {
             if store.isBusy {
                 ProgressView().controlSize(.small)
-                Text(store.text("Procesando…"))
+                Text(store.text(store.isPreparingPython ? "Preparando el entorno de Python…" : "Procesando…"))
             } else if let message = store.statusMessage {
                 Text(store.text(message))
                     .lineLimit(1)
