@@ -10,7 +10,7 @@ Open the DMG in Finder, drag Blinky to **Applications**, then open Blinky and si
 
 See [how to build a disk image](docs/distribution.md) if you want to package Blinky yourself.
 
-## Quick start
+## Quick build from source
 
 To build Blinky from source, you need the following tools.
 
