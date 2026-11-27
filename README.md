@@ -4,11 +4,11 @@ A native macOS app for accessing your Blink cameras from your Mac. The interface
 
 ## Install from a disk image
 
-Open the DMG in Finder, drag Blinky to **Applications**, then open the app. Use the disk image for your Mac’s architecture. It requires macOS 14 or later.
+[Download Blinky 0.4.0 for Apple Silicon](https://github.com/ivanmolera/blinky/releases/download/v0.4.0-local/Blinky-0.4.0-arm64-local.dmg). The DMG requires macOS 14 or later and includes Python, `blinkpy`, and FFmpeg.
 
-The disk image includes Python, `blinkpy`, and FFmpeg. You can sign in from Blinky after installing it. Connecting to Blink requires internet access.
+Open the DMG in Finder, drag Blinky to **Applications**, then open Blinky and sign in. Connecting to Blink requires internet access.
 
-See [how to build and notarize a DMG](docs/distribution.md) for distribution.
+See [how to build a disk image](docs/distribution.md) if you want to package Blinky yourself.
 
 ## Quick start
 
